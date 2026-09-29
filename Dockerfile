@@ -25,6 +25,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# su-exec: entrypoint fixes volume ownership as root, then drops to nextjs
+RUN apk add --no-cache su-exec
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
@@ -46,7 +48,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/package.json ./
 COPY --chown=nextjs:nodejs entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
-USER nextjs
+# Entrypoint starts as root only to chown the uploads volume, then runs as nextjs
 
 EXPOSE 3000
 

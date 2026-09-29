@@ -64,6 +64,16 @@ const ShootingStars = () => {
 
 const UPLOAD_CHUNK_SIZE = 50 * 1024 * 1024;
 
+// Parse a JSON response, turning empty or non-JSON bodies (e.g. a proxy error page) into a readable error
+async function readJson(res: Response) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: `서버 오류가 발생했습니다. (HTTP ${res.status})` };
+  }
+}
+
 // XHR instead of fetch for upload progress events
 function sendChunk(url: string, chunk: Blob, onProgress: (loaded: number) => void) {
   return new Promise<{ received?: number; error?: string }>((resolve, reject) => {
@@ -72,9 +82,9 @@ function sendChunk(url: string, chunk: Blob, onProgress: (loaded: number) => voi
     xhr.upload.onprogress = (e) => onProgress(e.loaded);
     xhr.onload = () => {
       try { resolve(JSON.parse(xhr.responseText)); }
-      catch { reject(new Error("Server error")); }
+      catch { reject(new Error(`서버 오류가 발생했습니다. (HTTP ${xhr.status})`)); }
     };
-    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.onerror = () => reject(new Error("네트워크 오류가 발생했습니다."));
     xhr.send(chunk);
   });
 }
@@ -173,7 +183,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
           isEncrypted,
           files: uploadFiles.map(f => ({ name: f.name, type: f.type, size: f.size })),
         }),
-      }).then(res => res.json());
+      }).then(readJson);
       if (init.error) throw new Error(init.error);
 
       // 2. Send each file in chunks (Cloudflare rejects requests over 100MB)
@@ -183,11 +193,12 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
         const file = uploadFiles[i];
         let offset = 0;
         let failures = 0;
+        let lastError = "";
         while (offset < file.size) {
           const chunk = file.slice(offset, offset + UPLOAD_CHUNK_SIZE);
           const res = await sendChunk(`/api/upload/${init.id}/${i}?offset=${offset}`, chunk, (loaded) => {
             setUploadProgress(Math.round(base + ((doneBytes + offset + loaded) / totalBytes) * range));
-          }).catch(() => null);
+          }).catch((err: Error) => { lastError = err.message; return null; });
 
           if (res?.received !== undefined) {
             // 409 also reports how much the server already has, so resume from there
@@ -197,13 +208,13 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
             failures++;
           }
           if (res?.error && res.received === undefined) throw new Error(res.error);
-          if (failures >= 3) throw new Error("Network error");
+          if (failures >= 3) throw new Error(lastError || res?.error || "업로드에 실패했습니다.");
         }
         doneBytes += file.size;
       }
 
       // 3. Finish: the server moves the files into place and issues the code
-      const result = await fetch(`/api/upload/${init.id}/complete`, { method: "POST" }).then(res => res.json());
+      const result = await fetch(`/api/upload/${init.id}/complete`, { method: "POST" }).then(readJson);
       if (result.error) throw new Error(result.error);
 
       setUploadProgress(100);

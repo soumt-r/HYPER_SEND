@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 800" overflow="visible">
+  <g transform="rotate(-15 300 450)">
+    <path id="orbit1" d="M 50 450 A 250 80 0 0 0 550 450 A 250 80 0 0 0 50 450" stroke="#DDDDDD" stroke-width="0.75" fill="none" />
+    <path id="orbit2" d="M -100 450 A 400 120 0 0 0 700 450 A 400 120 0 0 0 -100 450" stroke="#EEEEEE" stroke-width="0.5" fill="none" />
+    <path id="orbit3" d="M 150 450 A 150 50 0 0 0 450 450 A 150 50 0 0 0 150 450" stroke="#E5E5E5" stroke-width="1" fill="none" />
+  </g>
+</svg>

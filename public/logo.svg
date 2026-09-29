@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 100">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#111111;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#333333;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Icon Part -->
+  <g transform="translate(10, 10)">
+    <rect x="0" y="0" width="80" height="80" rx="20" fill="url(#grad1)" />
+    <!-- Folded paper/send icon -->
+    <path d="M 25 30 L 60 20 L 50 55 Z" fill="#FFFFFF" opacity="0.9" />
+    <path d="M 25 30 L 40 45 L 25 60 Z" fill="#E0E0E0" opacity="0.6" />
+    <!-- Orbital ring -->
+    <circle cx="40" cy="40" r="32" stroke="#FFFFFF" stroke-width="2" fill="none" stroke-dasharray="10 5" opacity="0.3" transform="rotate(45 40 40)" />
+  </g>
+
+  <!-- Text Part -->
+  <text x="110" y="55" font-family="'JetBrains Mono', 'Courier New', monospace" font-size="32" font-weight="900" fill="#111111" letter-spacing="4">HYPER_SEND</text>
+  <text x="110" y="75" font-family="'JetBrains Mono', 'Courier New', monospace" font-size="10" font-weight="600" fill="#999999" letter-spacing="2">HANYANG UNIV. EXCLUSIVE</text>
+</svg>

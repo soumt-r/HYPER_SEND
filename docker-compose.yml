@@ -1,0 +1,42 @@
+services:
+  hyper-send:
+    image: ${HYPER_SEND_IMAGE:-ghcr.io/soumt/hyper-send:latest}
+    container_name: hyper-send
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./uploads:/app/uploads
+    environment:
+      - DATABASE_URL=postgres://hyper_user:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/hyper_send
+      - REDIS_URL=redis://redis:6379
+      - NEXTAUTH_URL=https://hyps.soumt.moe
+      - AUTH_URL=https://hyps.soumt.moe
+      - AUTH_TRUST_HOST=true
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:15-alpine
+    container_name: hypersend_db
+    environment:
+      POSTGRES_USER: hyper_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: hyper_send
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: hypersend_redis
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

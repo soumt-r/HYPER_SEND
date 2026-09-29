@@ -1,69 +1,58 @@
-import Image from "next/image";
+import { auth } from "@/auth";
+import HeroClient from "@/components/HeroClient";
+import { db } from "@/db";
+import { files } from "@/db/schema";
+import { eq, desc } from "drizzle-orm";
 
-export default function Home() {
+export default async function Home() {
+  const session = await auth();
+  
+  let userFiles: any[] = [];
+  let isAdmin = false;
+  let adminData = null;
+
+  if (session?.user?.id) {
+    userFiles = await db.query.files.findMany({
+      where: eq(files.uploaderId, session.user.id),
+      orderBy: [desc(files.createdAt)]
+    });
+
+    if (session.user.email === process.env.ADMIN_EMAIL) {
+      isAdmin = true;
+      const allFiles = await db.query.files.findMany({
+        orderBy: [desc(files.createdAt)]
+      });
+      const allUsers = await db.query.users.findMany();
+      adminData = { allFiles, allUsers };
+    }
+  }
+  
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="min-h-screen bg-[#FCFCFC] dark:bg-[#111111] text-[#1A1A1A] dark:text-[#E0E0E0] font-sans selection:bg-[#1A1A1A] dark:selection:bg-[#E0E0E0] selection:text-[#FCFCFC] dark:selection:text-[#111111] flex flex-col relative overflow-hidden transition-colors duration-300">
+      {/* Background Grid */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#f0f0f0_1px,transparent_1px),linear-gradient(to_bottom,#f0f0f0_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,#222_1px,transparent_1px),linear-gradient(to_bottom,#222_1px,transparent_1px)] bg-[size:32px_32px] opacity-60 z-0 pointer-events-none"></div>
+      
+      <HeroClient session={session} initialFiles={userFiles} isAdmin={isAdmin} adminData={adminData} />
+      
+      {/* Footer */}
+      <footer className="w-full p-8 md:px-12 z-10 flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mt-auto">
+        <div className="flex flex-col items-start gap-4 max-w-xl">
+          <img src="/hanyang-logo.png" alt="Hanyang University" className="h-6 w-auto grayscale opacity-40 mix-blend-multiply dark:invert dark:opacity-20" />
+          <p className="text-[10px] text-[#999999] leading-relaxed break-keep font-sans">
+            HYPER_SEND는 한양대학교의 브랜딩을 사용하고 한양대학교 ERICA 학생이 제작하였지만, 대학 본부의 공식적인 인가를 받은 서비스는 아닙니다.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <div className="flex flex-col md:items-end gap-2 font-mono text-[9px] text-[#999999] uppercase tracking-widest shrink-0">
+          <div className="flex flex-col md:items-end gap-1">
+            <span>© 2026 HYPER_SEND.</span>
+            <span className="font-sans text-[8px] opacity-70 normal-case">한양대학교 ERICA 국제문화대학 일본학과 24학번 Soumt 드림</span>
+          </div>
+          <div className="flex gap-4">
+            <a href="/privacy" className="hover:text-[#1A1A1A] dark:hover:text-white transition-colors">Privacy Policy</a>
+            <a href="/terms" className="hover:text-[#1A1A1A] dark:hover:text-white transition-colors">Terms of Service</a>
+          </div>
         </div>
-      </main>
-    </div>
+      </footer>
+    </main>
   );
 }

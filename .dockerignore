@@ -1,0 +1,19 @@
+Dockerfile
+.dockerignore
+node_modules
+npm-debug.log
+README.md
+.next
+.git
+.env.local
+uploads
+db_data
+local.db
+# Temporary utility scripts
+fix.js
+fix2.js
+fix3.js
+fix4.js
+refactor-dark.js
+cleanup-dark.js
+get-docker.sh

@@ -131,8 +131,11 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   const adminBundles = isAdmin && adminData ? groupFilesByCode(adminData.allFiles) : {};
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      setSelectedFiles(prev => [...prev, ...Array.from(e.target.files!)]);
+    // Copy the FileList now: resetting the input below empties it, and the
+    // state updater may run later
+    const picked = Array.from(e.target.files ?? []);
+    if (picked.length > 0) {
+      setSelectedFiles(prev => [...prev, ...picked]);
       setUploadState("IDLE");
     }
     if (fileInputRef.current) fileInputRef.current.value = "";

@@ -1,6 +1,6 @@
 services:
   hyper-send:
-    image: ${HYPER_SEND_IMAGE:-ghcr.io/soumt/hyper-send:latest}
+    image: ${HYPER_SEND_IMAGE:-ghcr.io/soumt-r/hyper_send:latest}
     container_name: hyper-send
     restart: unless-stopped
     ports:

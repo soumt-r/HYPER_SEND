@@ -2,13 +2,13 @@
 
 <img src="public/illustration.png" alt="HYPER_SEND" width="260" />
 
-# HYPER_SEND
+# <img src="src/app/icon.svg" alt="" width="34" /> HYPER_SEND
 
 **가볍게 올리고, 코드 하나로 받는 파일 공유 서비스**
 
 한양대학교 구성원을 위한 · 브라우저 종단간 암호화 · 자동 만료
 
-<a href="https://hyps.soumt.moe"><img src="https://img.shields.io/badge/live-hyps.soumt.moe-111111?style=flat-square" alt="live" /></a>
+<a href="https://hyps.soumt.moe"><img src="https://img.shields.io/badge/live-hyps.soumt.moe-2549BB?style=flat-square" alt="live" /></a>
 <img src="https://img.shields.io/badge/Next.js-16-111111?style=flat-square&logo=nextdotjs" alt="Next.js 16" />
 <img src="https://img.shields.io/badge/PostgreSQL-15-111111?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL" />
 <img src="https://img.shields.io/badge/Redis-7-111111?style=flat-square&logo=redis&logoColor=white" alt="Redis" />

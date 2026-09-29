@@ -38,9 +38,8 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# We need the drizzle schema and db folder for sqlite
-COPY --from=builder --chown=nextjs:nodejs /app/src/db ./src/db
-COPY --from=builder --chown=nextjs:nodejs /app/drizzle.config.ts ./
+# SQL migrations, applied automatically on startup (src/instrumentation.ts)
+COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./
 
 # Entrypoint script

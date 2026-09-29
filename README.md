@@ -18,19 +18,19 @@
 
 ---
 
-## ✦ 이런 걸 합니다
+## 이런 걸 합니다
 
 | | |
 |---|---|
-| 📦 **번들 업로드** | 한 번에 최대 20개 · 파일당 최대 2GB, 묶음 하나에 8자리 코드 하나 |
-| 🔑 **코드로 다운로드** | 링크 대신 `A1B2C3D4` 같은 코드만 알려주면 끝 |
-| 🔒 **종단간 암호화 (선택)** | 비밀번호를 걸면 브라우저에서 AES-256-GCM으로 암호화한 뒤 업로드 — 서버는 내용을 볼 수 없어요 |
-| ⏳ **자동 만료** | 다운로드 횟수 또는 시간 기준으로 만료, 백그라운드 워커가 알아서 정리 |
-| 👀 **미리보기** | 이미지 · PDF는 받기 전에 바로 확인 |
-| 🎓 **학교 계정 로그인** | `@hanyang.ac.kr` 구글 계정으로 로그인, 사용자별 5GB 용량 |
-| 🌗 **다크 모드** | 물론이죠 |
+| **번들 업로드** | 한 번에 최대 20개 · 파일당 최대 2GB, 묶음 하나에 8자리 코드 하나 |
+| **코드로 다운로드** | 링크 대신 `A1B2C3D4` 같은 코드만 알려주면 끝 |
+| **종단간 암호화 (선택)** | 비밀번호를 걸면 브라우저에서 AES-256-GCM으로 암호화한 뒤 업로드 — 서버는 내용을 볼 수 없어요 |
+| **자동 만료** | 다운로드 횟수 또는 시간 기준으로 만료, 백그라운드 워커가 알아서 정리 |
+| **미리보기** | 이미지 · PDF는 받기 전에 바로 확인 |
+| **학교 계정 로그인** | `@hanyang.ac.kr` 구글 계정으로 로그인, 사용자별 5GB 용량 |
+| **다크 모드** | 라이트 / 다크 테마 지원 |
 
-## ✦ 셀프 호스팅
+## 셀프 호스팅
 
 GitHub Actions가 `master`에 푸시될 때마다 이미지를 빌드해 GHCR에 올립니다. 서버에서는 받아서 띄우기만 하면 돼요.
 
@@ -51,16 +51,18 @@ docker compose up -d
 | `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Google OAuth 클라이언트 (리디렉션 URI: `https://<도메인>/api/auth/callback/google`) |
 | `ADMIN_EMAIL` | 관리자 페이지에 접근할 이메일 |
 
-도메인이 다르다면 `docker-compose.yml`의 `NEXTAUTH_URL` / `AUTH_URL`도 바꿔주세요. 업로드된 파일은 `./uploads`에 저장됩니다.
+DB 스키마는 컨테이너가 시작될 때 자동으로 생성·마이그레이션됩니다. 도메인이 다르다면 `docker-compose.yml`의 `NEXTAUTH_URL` / `AUTH_URL`도 바꿔주세요. 업로드된 파일은 `./uploads`에 저장됩니다.
 
-## ✦ 로컬 개발
+## 로컬 개발
 
 ```bash
 npm install
 # .env.local에 DATABASE_URL, REDIS_URL, AUTH_* 설정
-npx drizzle-kit push   # 스키마 반영
+npx drizzle-kit push   # 로컬 DB에 스키마 반영
 npm run dev
 ```
+
+스키마(`src/db/schema.ts`)를 바꿨다면 `npx drizzle-kit generate`로 `drizzle/`에 마이그레이션을 추가해 함께 커밋하세요. 배포 시 자동으로 적용됩니다.
 
 **Stack** — Next.js 16 (App Router, standalone) · Auth.js · Drizzle ORM · PostgreSQL · Redis (rate limit) · Tailwind CSS 4 · Framer Motion
 

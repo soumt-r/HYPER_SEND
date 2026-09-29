@@ -1,9 +1,29 @@
 import { db } from "@/db";
 import { files, users } from "@/db/schema";
 import { lt, sql, eq } from "drizzle-orm";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
+
+// Apply pending SQL migrations from ./drizzle, retrying while the DB is still starting up
+async function runMigrations() {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await migrate(db, { migrationsFolder: "./drizzle" });
+      console.log("[Migrate] Database schema is up to date");
+      return;
+    } catch (err: any) {
+      if (attempt >= 10) throw err;
+      console.error(`[Migrate] Attempt ${attempt} failed (${err.message}), retrying in 3s...`);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+}
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
+    if (process.env.NODE_ENV === "production") {
+      await runMigrations();
+    }
+
     console.log("Starting Background Cleanup Worker...");
     
     // Run every 1 minute

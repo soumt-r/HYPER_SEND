@@ -16,8 +16,10 @@ services:
       - AUTH_URL=https://hyps.soumt.moe
       - AUTH_TRUST_HOST=true
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
   db:
     image: postgres:15-alpine
@@ -28,6 +30,11 @@ services:
       POSTGRES_DB: hyper_send
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hyper_user -d hyper_send"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
   redis:

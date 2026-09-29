@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+<div align="center">
 
-## Getting Started
+<img src="public/illustration.png" alt="HYPER_SEND" width="260" />
 
-First, run the development server:
+# HYPER_SEND
+
+**가볍게 올리고, 코드 하나로 받는 파일 공유 서비스**
+
+한양대학교 구성원을 위한 · 브라우저 종단간 암호화 · 자동 만료
+
+<a href="https://hyps.soumt.moe"><img src="https://img.shields.io/badge/live-hyps.soumt.moe-111111?style=flat-square" alt="live" /></a>
+<img src="https://img.shields.io/badge/Next.js-16-111111?style=flat-square&logo=nextdotjs" alt="Next.js 16" />
+<img src="https://img.shields.io/badge/PostgreSQL-15-111111?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL" />
+<img src="https://img.shields.io/badge/Redis-7-111111?style=flat-square&logo=redis&logoColor=white" alt="Redis" />
+<a href="https://github.com/soumt-r/HYPER_SEND/pkgs/container/hyper_send"><img src="https://img.shields.io/badge/ghcr.io-hyper__send-111111?style=flat-square&logo=docker&logoColor=white" alt="Docker image" /></a>
+
+</div>
+
+---
+
+## ✦ 이런 걸 합니다
+
+| | |
+|---|---|
+| 📦 **번들 업로드** | 한 번에 최대 20개 · 파일당 최대 2GB, 묶음 하나에 8자리 코드 하나 |
+| 🔑 **코드로 다운로드** | 링크 대신 `A1B2C3D4` 같은 코드만 알려주면 끝 |
+| 🔒 **종단간 암호화 (선택)** | 비밀번호를 걸면 브라우저에서 AES-256-GCM으로 암호화한 뒤 업로드 — 서버는 내용을 볼 수 없어요 |
+| ⏳ **자동 만료** | 다운로드 횟수 또는 시간 기준으로 만료, 백그라운드 워커가 알아서 정리 |
+| 👀 **미리보기** | 이미지 · PDF는 받기 전에 바로 확인 |
+| 🎓 **학교 계정 로그인** | `@hanyang.ac.kr` 구글 계정으로 로그인, 사용자별 5GB 용량 |
+| 🌗 **다크 모드** | 물론이죠 |
+
+## ✦ 셀프 호스팅
+
+GitHub Actions가 `master`에 푸시될 때마다 이미지를 빌드해 GHCR에 올립니다. 서버에서는 받아서 띄우기만 하면 돼요.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# docker-compose.yml, .env.example만 있으면 됩니다
+cp .env.example .env
+# .env 채우기 (POSTGRES_PASSWORD는 `openssl rand -hex 24` 추천)
+
+docker compose pull
+docker compose up -d
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| 변수 | 설명 |
+|---|---|
+| `HYPER_SEND_IMAGE` | 실행할 이미지 (기본 `ghcr.io/soumt-r/hyper_send:latest`) |
+| `POSTGRES_PASSWORD` | DB 비밀번호 — 영숫자만 |
+| `AUTH_SECRET` | `npx auth secret`으로 생성 |
+| `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Google OAuth 클라이언트 (리디렉션 URI: `https://<도메인>/api/auth/callback/google`) |
+| `ADMIN_EMAIL` | 관리자 페이지에 접근할 이메일 |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+도메인이 다르다면 `docker-compose.yml`의 `NEXTAUTH_URL` / `AUTH_URL`도 바꿔주세요. 업로드된 파일은 `./uploads`에 저장됩니다.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## ✦ 로컬 개발
 
-## Learn More
+```bash
+npm install
+# .env.local에 DATABASE_URL, REDIS_URL, AUTH_* 설정
+npx drizzle-kit push   # 스키마 반영
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+**Stack** — Next.js 16 (App Router, standalone) · Auth.js · Drizzle ORM · PostgreSQL · Redis (rate limit) · Tailwind CSS 4 · Framer Motion
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+<div align="center">
+<sub>
+HYPER_SEND는 한양대학교의 브랜딩을 사용하고 한양대학교 ERICA 학생이 제작하였지만, 대학 본부의 공식적인 인가를 받은 서비스는 아닙니다.<br/>
+Made by <b>Soumt</b> · 한양대학교 ERICA 국제문화대학 일본학과
+</sub>
+</div>

@@ -2,6 +2,7 @@ import { db } from "@/db";
 import { files, users } from "@/db/schema";
 import { lt, sql, eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
+import { cleanupStaleSessions } from "@/lib/upload-session";
 
 // Apply pending SQL migrations from ./drizzle, retrying while the DB is still starting up
 async function runMigrations() {
@@ -28,6 +29,9 @@ export async function register() {
     
     // Run every 1 minute
     setInterval(async () => {
+      // Remove temp files of chunked uploads that were abandoned
+      await cleanupStaleSessions().catch((err) => console.error("[Worker] Upload cleanup error:", err));
+
       try {
         const now = new Date();
         

@@ -5,6 +5,7 @@ import { ArrowRight, UploadCloud, Lock, Key, Clock, Hash, ShieldCheck, X, Downlo
 import Image from "next/image";
 import { useState, useTransition, useRef, useEffect } from "react";
 import { useTheme } from "next-themes";
+import { useRouter } from "next/navigation";
 import { loginWithGoogle, logout } from "@/app/actions/auth";
 import { deleteFileAction } from "@/app/actions/manage";
 import { encryptFile, decryptBlob } from "@/lib/e2ee";
@@ -61,9 +62,27 @@ const ShootingStars = () => {
   );
 };
 
+const UPLOAD_CHUNK_SIZE = 50 * 1024 * 1024;
+
+// XHR instead of fetch for upload progress events
+function sendChunk(url: string, chunk: Blob, onProgress: (loaded: number) => void) {
+  return new Promise<{ received?: number; error?: string }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    xhr.upload.onprogress = (e) => onProgress(e.loaded);
+    xhr.onload = () => {
+      try { resolve(JSON.parse(xhr.responseText)); }
+      catch { reject(new Error("Server error")); }
+    };
+    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.send(chunk);
+  });
+}
+
 export default function HeroClient({ session, initialFiles = [], isAdmin = false, adminData = null }: { session: any, initialFiles?: any[], isAdmin?: boolean, adminData?: any }) {
   const [activeModal, setActiveModal] = useState<"NONE" | "DOWNLOAD" | "UPLOAD" | "MANAGE" | "ADMIN">("NONE");
   const { theme, setTheme } = useTheme();
+  const router = useRouter();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -97,8 +116,6 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   const [uploadProgress, setUploadProgress] = useState(0); // 0~100
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Preview state
-  const [previewFile, setPreviewFile] = useState<{ url: string; type: string; name: string } | null>(null);
 
   const [isPending, startTransition] = useTransition();
 
@@ -123,57 +140,75 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
 
   const handleUpload = async () => {
     if (selectedFiles.length === 0) return;
+
     try {
       const isEncrypted = uploadPassword.length > 0;
-      const formData = new FormData();
-      formData.append("expireType", expireType);
-      formData.append("expireValue", expireValue);
-      formData.append("isEncrypted", isEncrypted.toString());
+      let uploadFiles: File[] = selectedFiles;
 
       if (isEncrypted) {
         setUploadState("ENCRYPTING");
         setUploadProgress(0);
+        uploadFiles = [];
         for (let i = 0; i < selectedFiles.length; i++) {
-          const encryptedFile = await encryptFile(selectedFiles[i], uploadPassword);
-          formData.append("file", encryptedFile);
+          uploadFiles.push(await encryptFile(selectedFiles[i], uploadPassword));
           setUploadProgress(Math.round(((i + 1) / selectedFiles.length) * 40)); // 0→40% = encrypt phase
         }
-      } else {
-        for (const file of selectedFiles) formData.append("file", file);
       }
 
       setUploadState("UPLOADING");
-      setUploadProgress(isEncrypted ? 40 : 0);
+      const base = isEncrypted ? 40 : 0;
+      const range = isEncrypted ? 60 : 100;
+      setUploadProgress(base);
 
-      // XHR for progress tracking
-      const result = await new Promise<{ success?: boolean; code?: string; error?: string }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", "/api/upload");
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const base = isEncrypted ? 40 : 0;
-            const range = isEncrypted ? 60 : 100;
-            setUploadProgress(Math.round(base + (e.loaded / e.total) * range));
+      // 1. Start an upload session
+      const init = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expireType,
+          expireValue,
+          isEncrypted,
+          files: uploadFiles.map(f => ({ name: f.name, type: f.type, size: f.size })),
+        }),
+      }).then(res => res.json());
+      if (init.error) throw new Error(init.error);
+
+      // 2. Send each file in chunks (Cloudflare rejects requests over 100MB)
+      const totalBytes = uploadFiles.reduce((acc, f) => acc + f.size, 0) || 1;
+      let doneBytes = 0;
+      for (let i = 0; i < uploadFiles.length; i++) {
+        const file = uploadFiles[i];
+        let offset = 0;
+        let failures = 0;
+        while (offset < file.size) {
+          const chunk = file.slice(offset, offset + UPLOAD_CHUNK_SIZE);
+          const res = await sendChunk(`/api/upload/${init.id}/${i}?offset=${offset}`, chunk, (loaded) => {
+            setUploadProgress(Math.round(base + ((doneBytes + offset + loaded) / totalBytes) * range));
+          }).catch(() => null);
+
+          if (res?.received !== undefined) {
+            // 409 also reports how much the server already has, so resume from there
+            offset = res.received;
+            failures = res.error ? failures + 1 : 0;
+          } else {
+            failures++;
           }
-        };
-        xhr.onload = () => {
-          try { resolve(JSON.parse(xhr.responseText)); }
-          catch { reject(new Error("Server error")); }
-        };
-        xhr.onerror = () => reject(new Error("Network error"));
-        xhr.send(formData);
-      });
-
-      if (result.error) {
-        setUploadState("ERROR");
-        setUploadResult(result.error);
-      } else if (result.success) {
-        setUploadProgress(100);
-        setUploadState("SUCCESS");
-        setUploadResult(result.code!);
-        setSelectedFiles([]);
-        setUploadPassword("");
+          if (res?.error && res.received === undefined) throw new Error(res.error);
+          if (failures >= 3) throw new Error("Network error");
+        }
+        doneBytes += file.size;
       }
+
+      // 3. Finish: the server moves the files into place and issues the code
+      const result = await fetch(`/api/upload/${init.id}/complete`, { method: "POST" }).then(res => res.json());
+      if (result.error) throw new Error(result.error);
+
+      setUploadProgress(100);
+      setUploadState("SUCCESS");
+      setUploadResult(result.code);
+      setSelectedFiles([]);
+      setUploadPassword("");
+      router.refresh(); // reload the file list and quota
     } catch (err: any) {
       setUploadState("ERROR");
       setUploadResult(err.message || "An unexpected error occurred");
@@ -239,31 +274,6 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
     } finally {
       setActiveDownloadId(null);
     }
-  };
-
-  const handlePreviewFile = async (file: any) => {
-    setActiveDownloadId(file.id);
-    try {
-      const res = await fetch(`/api/download/${file.id}`);
-      if (!res.ok) throw new Error("Preview failed");
-      const blob = await res.blob();
-      let finalBlob = blob;
-      if (file.isEncrypted && downloadPassword) {
-        finalBlob = await decryptBlob(blob, downloadPassword);
-        finalBlob = new Blob([finalBlob], { type: file.mimeType || "application/octet-stream" });
-      }
-      const url = window.URL.createObjectURL(finalBlob);
-      setPreviewFile({ url, type: finalBlob.type || file.mimeType || "", name: file.originalName });
-    } catch (err: any) {
-      alert("미리보기에 실패했습니다.");
-    } finally {
-      setActiveDownloadId(null);
-    }
-  };
-
-  const closePreview = () => {
-    if (previewFile) window.URL.revokeObjectURL(previewFile.url);
-    setPreviewFile(null);
   };
 
   const handleDelete = async (fileId: string) => {
@@ -510,11 +520,6 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                       ) : (
                         <div className="flex flex-col gap-3 max-h-[40vh] overflow-y-auto custom-scrollbar pr-2">
                           {foundFiles.map((file) => {
-                            const isPreviewable = !file.isEncrypted &&
-                              (file.mimeType?.startsWith("image/") || file.mimeType === "application/pdf");
-                            const isEncryptedPreviewable = file.isEncrypted && isBundleUnlocked &&
-                              (file.originalName?.match(/\.(jpg|jpeg|png|gif|webp|pdf)$/i));
-                            const canPreview = isPreviewable || isEncryptedPreviewable;
                             return (
                               <div key={file.id} className="w-full border-[0.5px] border-[#E5E5E5] dark:border-[#333333] p-3 flex justify-between items-center group hover:border-[#111111] dark:hover:border-white transition-colors">
                                 <div className="flex flex-col gap-1 overflow-hidden">
@@ -527,16 +532,6 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                                   </span>
                                 </div>
                                 <div className="flex items-center gap-1.5">
-                                  {canPreview && (
-                                    <button
-                                      onClick={() => handlePreviewFile(file)}
-                                      disabled={activeDownloadId !== null}
-                                      title="미리보기"
-                                      className="w-8 h-8 rounded-full border-[0.5px] border-[#DDDDDD] dark:border-[#444444] flex items-center justify-center text-[#999999] hover:border-[#2549BB] hover:text-[#2549BB] transition-all disabled:opacity-50"
-                                    >
-                                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                                    </button>
-                                  )}
                                   <button
                                     onClick={() => handleDownloadSingleFile(file)}
                                     disabled={activeDownloadId !== null}
@@ -748,44 +743,6 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                   </div>
                 </>
               )}
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* PREVIEW MODAL */}
-      <AnimatePresence>
-        {previewFile && (
-          <motion.div
-            className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ ease: [0.32, 0.72, 0, 1] }}
-          >
-            <div className="absolute inset-0 bg-[#FCFCFC]/80 dark:bg-[#111111]/80 backdrop-blur-md" onClick={closePreview} />
-            <motion.div
-              className="relative w-full max-w-4xl max-h-[90vh] bg-white dark:bg-[#1A1A1A] border-[0.5px] border-[#EEEEEE] dark:border-[#333333] shadow-2xl flex flex-col overflow-hidden"
-              initial={{ scale: 0.95, opacity: 0, y: 10 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 10 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300, mass: 0.8 }}
-            >
-              <div className="flex justify-between items-center p-4 border-b-[0.5px] border-[#EEEEEE] dark:border-[#333333] bg-[#FAFAFA] dark:bg-[#111111]">
-                <div className="font-mono text-xs text-[#111111] dark:text-white truncate pr-4">{previewFile.name}</div>
-                <button onClick={closePreview} className="text-[#999999] hover:text-[#111111] dark:hover:text-white transition-colors">
-                  <X size={18} />
-                </button>
-              </div>
-              <div className="flex-1 overflow-auto bg-[#F5F7FA] dark:bg-[#0A0A0A] flex items-center justify-center p-4 min-h-[50vh]">
-                {previewFile.type.startsWith("image/") ? (
-                  <img src={previewFile.url} alt={previewFile.name} className="max-w-full max-h-[75vh] object-contain" />
-                ) : previewFile.type === "application/pdf" ? (
-                  <iframe src={previewFile.url} className="w-full h-[75vh] border-none" title={previewFile.name} />
-                ) : (
-                  <div className="font-mono text-sm text-[#999999]">미리보기를 지원하지 않는 형식입니다.</div>
-                )}
-              </div>
             </motion.div>
           </motion.div>
         )}

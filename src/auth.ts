@@ -17,9 +17,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
       authorization: {
         params: {
-          prompt: "consent",
-          access_type: "offline",
-          response_type: "code",
+          prompt: "select_account",
           hd: "hanyang.ac.kr", // Force Google login to only allow this domain
         },
       },

@@ -2,17 +2,14 @@ import { db } from "@/db";
 import { files } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
-import { rateLimit } from "@/lib/rate-limit";
+import { getClientIp, rateLimit } from "@/lib/rate-limit";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ code: string }> }
 ) {
   // 🔒 Rate Limit: 20 code lookups per IP per minute (brute-force protection)
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    ?? request.headers.get("x-real-ip")
-    ?? "unknown";
-  const { allowed } = await rateLimit(`lookup:${ip}`, 20, 60);
+  const { allowed } = await rateLimit(`lookup:${getClientIp(request.headers)}`, 20, 60);
   if (!allowed) {
     return NextResponse.json({ error: "Too many requests. Please slow down." }, {
       status: 429,

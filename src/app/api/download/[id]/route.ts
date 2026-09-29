@@ -1,11 +1,11 @@
 import { db } from "@/db";
-import { files } from "@/db/schema";
-import { eq } from "drizzle-orm";
-import { readFile } from "fs/promises";
+import { files, users } from "@/db/schema";
+import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { open, unlink } from "fs/promises";
+import { Readable } from "stream";
 import { NextRequest, NextResponse } from "next/server";
-import { existsSync } from "fs";
 import { resolve } from "path";
-import { rateLimit } from "@/lib/rate-limit";
+import { getClientIp, rateLimit } from "@/lib/rate-limit";
 
 export async function GET(
   request: NextRequest,
@@ -14,10 +14,8 @@ export async function GET(
   const id = (await params).id;
 
   // 🔒 Rate Limit: 30 downloads per IP per minute
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    ?? request.headers.get("x-real-ip")
-    ?? "unknown";
-  const { allowed, remaining } = await rateLimit(`download:${ip}`, 30, 60);
+  const ip = getClientIp(request.headers);
+  const { allowed } = await rateLimit(`download:${ip}`, 30, 60);
   if (!allowed) {
     return NextResponse.json({ error: "Too many requests. Please slow down." }, {
       status: 429,
@@ -50,47 +48,47 @@ export async function GET(
 
   // Check Time expiration
   if (fileRecord.expiresAt && fileRecord.expiresAt < new Date()) {
-    // Optionally: Clean up db and local file here
     return NextResponse.json({ error: "File link has expired." }, { status: 410 });
   }
 
-  // Check Count expiration
-  if (fileRecord.maxDownloads && fileRecord.currentDownloads! >= fileRecord.maxDownloads) {
-    return NextResponse.json({ error: "Download limit exceeded." }, { status: 410 });
-  }
-
-  // Check file exists physically
-  if (!existsSync(fileRecord.localPath)) {
+  // Open the file before claiming a download, so a missing file doesn't use one up.
+  // The open handle also keeps the data readable if the file is unlinked below.
+  let handle;
+  try {
+    handle = await open(resolvedPath, "r");
+  } catch {
     return NextResponse.json({ error: "File data missing." }, { status: 404 });
   }
 
-  // Read file
-  const fileBuffer = await readFile(fileRecord.localPath);
-
-  // Update download count if needed
+  // 🔒 Atomically claim one download, so concurrent requests can't exceed maxDownloads
   if (fileRecord.maxDownloads) {
-    const newCount = fileRecord.currentDownloads! + 1;
-    if (newCount >= fileRecord.maxDownloads) {
-      // Auto delete
-      import("fs").then(fs => {
-        try { fs.unlinkSync(fileRecord.localPath); } catch (e) {}
-      });
+    const [claimed] = await db.update(files)
+      .set({ currentDownloads: sql`${files.currentDownloads} + 1` })
+      .where(and(
+        eq(files.id, fileRecord.id),
+        or(isNull(files.currentDownloads), lt(files.currentDownloads, fileRecord.maxDownloads))
+      ))
+      .returning({ currentDownloads: files.currentDownloads });
+
+    if (!claimed) {
+      await handle.close();
+      return NextResponse.json({ error: "Download limit exceeded." }, { status: 410 });
+    }
+
+    // Last allowed download: remove the record and file now (the open handle still streams it)
+    if (claimed.currentDownloads! >= fileRecord.maxDownloads) {
       await db.delete(files).where(eq(files.id, fileRecord.id));
-      
-      const { users } = await import("@/db/schema");
-      const { sql } = await import("drizzle-orm");
       await db.update(users)
         .set({ usedBytes: sql`${users.usedBytes} - ${fileRecord.sizeBytes}` })
         .where(eq(users.id, fileRecord.uploaderId));
-    } else {
-      await db.update(files)
-        .set({ currentDownloads: newCount })
-        .where(eq(files.id, fileRecord.id));
+      await unlink(resolvedPath).catch(() => {});
     }
   }
 
-  // Return as downloadable file
-  return new NextResponse(fileBuffer, {
+  // Stream from disk instead of buffering the whole file in memory
+  const body = Readable.toWeb(handle.createReadStream()) as ReadableStream;
+
+  return new NextResponse(body, {
     headers: {
       "Content-Disposition": `attachment; filename="${encodeURIComponent(fileRecord.originalName)}"`,
       "Content-Type": fileRecord.mimeType || "application/octet-stream",

@@ -50,3 +50,16 @@ export async function rateLimit(
     return { allowed: true, remaining: limit };
   }
 }
+
+/**
+ * Resolve the real client IP behind Cloudflare Tunnel.
+ * CF-Connecting-IP is set by Cloudflare and can't be forged as long as the app
+ * port is only reachable through the tunnel (bound to 127.0.0.1 in docker-compose).
+ * X-Forwarded-For's first entry is client-controlled, so only its last hop is used.
+ */
+export function getClientIp(headers: Headers): string {
+  return headers.get("cf-connecting-ip")?.trim()
+    || headers.get("x-real-ip")?.trim()
+    || headers.get("x-forwarded-for")?.split(",").pop()?.trim()
+    || "unknown";
+}

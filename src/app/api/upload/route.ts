@@ -1,12 +1,13 @@
 import { auth } from "@/auth";
 import { db } from "@/db";
 import { files, users } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import crypto from "crypto";
 import { existsSync } from "fs";
 import { rateLimit } from "@/lib/rate-limit";
+import { parseExpiry, MAX_DOWNLOAD_COUNT, MAX_EXPIRE_HOURS } from "@/lib/expiry";
 import { NextRequest, NextResponse } from "next/server";
 
 const MAX_SINGLE_FILE_SIZE = 2 * 1024 * 1024 * 1024;
@@ -41,12 +42,15 @@ export async function POST(request: NextRequest) {
 
   const formData = await request.formData();
   const uploadedFiles = formData.getAll("file") as File[];
-  const expireType = formData.get("expireType") as string;
-  const expireValue = parseInt(formData.get("expireValue") as string);
+  const expiry = parseExpiry(formData.get("expireType"), formData.get("expireValue"));
   const isEncrypted = formData.get("isEncrypted") === "true";
 
   if (!uploadedFiles || uploadedFiles.length === 0) {
     return NextResponse.json({ error: "No files uploaded" }, { status: 400 });
+  }
+
+  if (!expiry) {
+    return NextResponse.json({ error: `만료 조건이 올바르지 않습니다. (다운로드 1~${MAX_DOWNLOAD_COUNT}회 또는 1~${MAX_EXPIRE_HOURS}시간)` }, { status: 400 });
   }
 
   if (uploadedFiles.length > MAX_BUNDLE_FILE_COUNT) {
@@ -75,14 +79,6 @@ export async function POST(request: NextRequest) {
   const uploadDir = join(process.cwd(), "uploads");
   if (!existsSync(uploadDir)) await mkdir(uploadDir, { recursive: true });
 
-  let expiresAt = null;
-  let maxDownloads = null;
-  if (expireType === "TIME") {
-    expiresAt = new Date(Date.now() + expireValue * 60 * 60 * 1000);
-  } else {
-    maxDownloads = expireValue;
-  }
-
   const insertData = [];
   for (const file of uploadedFiles) {
     const safeFilename = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
@@ -97,15 +93,14 @@ export async function POST(request: NextRequest) {
       sizeBytes: file.size,
       localPath,
       downloadCode: code,
-      expiresAt,
-      maxDownloads,
+      ...expiry,
       isEncrypted,
     });
   }
 
   await db.insert(files).values(insertData);
   await db.update(users)
-    .set({ usedBytes: user.usedBytes! + totalSize })
+    .set({ usedBytes: sql`${users.usedBytes} + ${totalSize}` })
     .where(eq(users.id, session.user.id));
 
   return NextResponse.json({ success: true, code });

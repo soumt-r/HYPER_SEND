@@ -6,9 +6,9 @@ import Image from "next/image";
 import { useState, useTransition, useRef, useEffect } from "react";
 import { useTheme } from "next-themes";
 import { loginWithGoogle, logout } from "@/app/actions/auth";
-import { uploadFileAction } from "@/app/actions/upload";
 import { deleteFileAction } from "@/app/actions/manage";
 import { encryptFile, decryptBlob } from "@/lib/e2ee";
+import { MAX_DOWNLOAD_COUNT, MAX_EXPIRE_HOURS } from "@/lib/expiry";
 import { QRCodeSVG } from "qrcode.react";
 
 const OrbitSVG = () => (
@@ -648,6 +648,8 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                           </div>
                           <input
                             type="number"
+                            min={1}
+                            max={expireType === "COUNT" ? MAX_DOWNLOAD_COUNT : MAX_EXPIRE_HOURS}
                             value={expireValue}
                             onChange={(e) => setExpireValue(e.target.value)}
                             className="w-full bg-transparent border-b-[0.5px] border-[#DDDDDD] dark:border-[#444444] pb-1 font-mono text-sm outline-none text-[#111111] dark:text-white text-center focus:border-[#111111] dark:focus:border-white transition-colors"

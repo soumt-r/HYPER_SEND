@@ -181,6 +181,8 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   const [downloadPassword, setDownloadPassword] = useState("");
   const [downloadError, setDownloadError] = useState("");
   const [activeDownloadId, setActiveDownloadId] = useState<string | null>(null);
+  // Progress of the active (encrypted) download: percent received, then decrypting
+  const [downloadProgress, setDownloadProgress] = useState<{ percent: number; decrypting: boolean } | null>(null);
 
   // Upload State
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -305,24 +307,41 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       return;
     }
 
+    // Check before fetching, so a missing password doesn't use up a download
+    if (!downloadPassword) {
+      alert("Password is required to decrypt this file.");
+      return;
+    }
+
     setActiveDownloadId(file.id);
+    setDownloadProgress({ percent: 0, decrypting: false });
     try {
       const res = await fetch(`/api/download/${file.id}`);
-      if (!res.ok) {
-        const err = await res.json();
+      if (!res.ok || !res.body) {
+        const err = await readJson(res);
         throw new Error(err.error || "Download failed");
       }
-      const blob = await res.blob();
-      let finalBlob = blob;
-      if (file.isEncrypted && downloadPassword) {
-        try {
-          finalBlob = await decryptBlob(blob, downloadPassword);
-          finalBlob = new Blob([finalBlob], { type: res.headers.get("Content-Type") || "application/octet-stream" });
-        } catch {
-          throw new Error("Wrong Password or Decryption failed");
-        }
-      } else if (file.isEncrypted && !downloadPassword) {
-        throw new Error("Password is required to decrypt this file.");
+
+      // Read the body manually to report progress
+      const total = Number(res.headers.get("Content-Length")) || file.sizeBytes || 0;
+      const reader = res.body.getReader();
+      const parts: Uint8Array<ArrayBuffer>[] = [];
+      let loaded = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value);
+        loaded += value.byteLength;
+        if (total) setDownloadProgress({ percent: Math.min(100, Math.round((loaded / total) * 100)), decrypting: false });
+      }
+
+      setDownloadProgress({ percent: 100, decrypting: true });
+      let finalBlob: Blob;
+      try {
+        finalBlob = await decryptBlob(new Blob(parts), downloadPassword);
+        finalBlob = new Blob([finalBlob], { type: res.headers.get("Content-Type") || "application/octet-stream" });
+      } catch {
+        throw new Error("Wrong Password or Decryption failed");
       }
       const url = window.URL.createObjectURL(finalBlob);
       const a = document.createElement("a");
@@ -331,7 +350,8 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       document.body.appendChild(a);
       a.click();
       a.remove();
-      window.URL.revokeObjectURL(url);
+      // Revoking right away can cancel the save in some browsers
+      setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
     } catch (err: any) {
       if (err.message.includes("Wrong Password") || err.message.includes("failed") || err.message.includes("decryption")) {
         setDownloadError("잘못된 비밀번호입니다. 다시 시도해주세요.");
@@ -342,6 +362,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       }
     } finally {
       setActiveDownloadId(null);
+      setDownloadProgress(null);
     }
   };
 
@@ -590,7 +611,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                         <div className="flex flex-col gap-3 max-h-[40vh] overflow-y-auto custom-scrollbar pr-2">
                           {foundFiles.map((file) => {
                             return (
-                              <div key={file.id} className="w-full border-[0.5px] border-[#E5E5E5] dark:border-[#333333] p-3 flex justify-between items-center group hover:border-[#111111] dark:hover:border-white transition-colors">
+                              <div key={file.id} className="relative overflow-hidden w-full border-[0.5px] border-[#E5E5E5] dark:border-[#333333] p-3 flex justify-between items-center group hover:border-[#111111] dark:hover:border-white transition-colors">
                                 <div className="flex flex-col gap-1 overflow-hidden">
                                   <span className="font-mono text-xs text-[#111111] dark:text-white truncate max-w-[200px]" title={file.originalName}>
                                     {file.isEncrypted && <Lock size={10} className="inline mr-1 text-[#999999]" />}
@@ -598,8 +619,21 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                                   </span>
                                   <span className="font-mono text-[9px] text-[#999999] tracking-widest uppercase">
                                     {(file.sizeBytes / 1024 / 1024).toFixed(2)} MB
+                                    {activeDownloadId === file.id && downloadProgress && (
+                                      <span className="text-[#2549BB] dark:text-[#6F8FFF]">
+                                        {downloadProgress.decrypting ? " · DECRYPTING" : ` · ${downloadProgress.percent}%`}
+                                      </span>
+                                    )}
                                   </span>
                                 </div>
+                                {activeDownloadId === file.id && downloadProgress && (
+                                  <div className="absolute left-0 bottom-0 h-[2px] w-full bg-[#EEEEEE] dark:bg-[#2A2A2A]">
+                                    <div
+                                      className={`h-full bg-[#2549BB] dark:bg-[#6F8FFF] transition-[width] duration-200 ${downloadProgress.decrypting ? "animate-pulse" : ""}`}
+                                      style={{ width: `${downloadProgress.percent}%` }}
+                                    />
+                                  </div>
+                                )}
                                 <div className="flex items-center gap-1.5">
                                   <button
                                     onClick={() => handleDownloadSingleFile(file)}

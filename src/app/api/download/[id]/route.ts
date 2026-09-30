@@ -7,6 +7,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolve } from "path";
 import { getClientIp, rateLimit } from "@/lib/rate-limit";
 
+// ASCII fallback plus RFC 5987 filename* so non-ASCII (e.g. Korean) names are saved correctly
+function contentDisposition(name: string) {
+  const fallback = name.replace(/[^\x20-\x7E]|["\\]/g, "_");
+  const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -90,7 +97,7 @@ export async function GET(
 
   return new NextResponse(body, {
     headers: {
-      "Content-Disposition": `attachment; filename="${encodeURIComponent(fileRecord.originalName)}"`,
+      "Content-Disposition": contentDisposition(fileRecord.originalName),
       "Content-Type": fileRecord.mimeType || "application/octet-stream",
       "Content-Length": fileRecord.sizeBytes.toString(),
       "X-Content-Type-Options": "nosniff",

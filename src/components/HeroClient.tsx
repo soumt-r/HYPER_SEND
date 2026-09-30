@@ -8,7 +8,7 @@ import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import { loginWithGoogle, logout } from "@/app/actions/auth";
 import { deleteFileAction } from "@/app/actions/manage";
-import { encryptFile, decryptBlob } from "@/lib/e2ee";
+import { createFileKey, decryptBlob, encryptRange, encryptedRangeSize } from "@/lib/e2ee";
 import { MAX_DOWNLOAD_COUNT, MAX_EXPIRE_HOURS } from "@/lib/expiry";
 import { QRCodeSVG } from "qrcode.react";
 
@@ -62,7 +62,73 @@ const ShootingStars = () => {
   );
 };
 
+// Must be a multiple of the 5MB E2EE block size
 const UPLOAD_CHUNK_SIZE = 50 * 1024 * 1024;
+// Files uploaded at the same time, to make better use of the connection
+const PARALLEL_FILE_UPLOADS = 3;
+
+type UploadPiece = { start: number; length: number; data: () => Promise<Blob> };
+type UploadPlan = { name: string; type: string; size: number; pieces: UploadPiece[] };
+
+// Split a file into upload pieces. Encrypted pieces are produced right before
+// sending, so large files never have to be encrypted (or held) all at once.
+async function planUpload(file: File, password: string): Promise<UploadPlan> {
+  const pieces: UploadPiece[] = [];
+  if (!password) {
+    for (let start = 0; start < file.size; start += UPLOAD_CHUNK_SIZE) {
+      const end = Math.min(start + UPLOAD_CHUNK_SIZE, file.size);
+      pieces.push({ start, length: end - start, data: async () => file.slice(start, end) });
+    }
+    return { name: file.name, type: file.type, size: file.size, pieces };
+  }
+
+  const fileKey = await createFileKey(password);
+  let uploadOffset = 0;
+  let plainStart = 0;
+  do {
+    const start = plainStart;
+    const end = Math.min(start + UPLOAD_CHUNK_SIZE, file.size);
+    const length = encryptedRangeSize(start, end);
+    pieces.push({ start: uploadOffset, length, data: () => encryptRange(file, start, end, fileKey) });
+    uploadOffset += length;
+    plainStart = end;
+  } while (plainStart < file.size);
+  return { name: file.name, type: file.type || "application/octet-stream", size: uploadOffset, pieces };
+}
+
+// Send a file's pieces in order, retrying and resuming from what the server already has
+async function uploadPieces(sessionId: string, index: number, plan: UploadPlan, onProgress: (bytes: number) => void) {
+  let i = 0;
+  let failures = 0;
+  let lastError = "";
+  while (i < plan.pieces.length) {
+    const piece = plan.pieces[i];
+    const res = await sendChunk(
+      `/api/upload/${sessionId}/${index}?offset=${piece.start}&length=${piece.length}`,
+      await piece.data(),
+      (loaded) => onProgress(piece.start + loaded),
+    ).catch((err: Error) => { lastError = err.message; return null; });
+
+    if (res?.received !== undefined) {
+      if (res.error) {
+        failures++;
+        lastError = res.error;
+      } else {
+        failures = 0;
+      }
+      // Continue from the server's position (also covers a lost response to a stored piece)
+      const next = plan.pieces.findIndex(p => p.start === res.received);
+      if (next === -1 && res.received !== plan.size) throw new Error("업로드 상태가 맞지 않습니다. 다시 시도해주세요.");
+      i = next === -1 ? plan.pieces.length : next;
+    } else if (res?.error) {
+      throw new Error(res.error);
+    } else {
+      failures++;
+    }
+    if (failures >= 3) throw new Error(lastError || "업로드에 실패했습니다.");
+  }
+  onProgress(plan.size);
+}
 
 // Parse a JSON response, turning empty or non-JSON bodies (e.g. a proxy error page) into a readable error
 async function readJson(res: Response) {
@@ -155,23 +221,10 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
     if (selectedFiles.length === 0) return;
 
     try {
-      const isEncrypted = uploadPassword.length > 0;
-      let uploadFiles: File[] = selectedFiles;
-
-      if (isEncrypted) {
-        setUploadState("ENCRYPTING");
-        setUploadProgress(0);
-        uploadFiles = [];
-        for (let i = 0; i < selectedFiles.length; i++) {
-          uploadFiles.push(await encryptFile(selectedFiles[i], uploadPassword));
-          setUploadProgress(Math.round(((i + 1) / selectedFiles.length) * 40)); // 0→40% = encrypt phase
-        }
-      }
-
+      const password = uploadPassword;
       setUploadState("UPLOADING");
-      const base = isEncrypted ? 40 : 0;
-      const range = isEncrypted ? 60 : 100;
-      setUploadProgress(base);
+      setUploadProgress(0);
+      const plans = await Promise.all(selectedFiles.map(f => planUpload(f, password)));
 
       // 1. Start an upload session
       const init = await fetch("/api/upload", {
@@ -180,38 +233,33 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
         body: JSON.stringify({
           expireType,
           expireValue,
-          isEncrypted,
-          files: uploadFiles.map(f => ({ name: f.name, type: f.type, size: f.size })),
+          isEncrypted: password.length > 0,
+          files: plans.map(p => ({ name: p.name, type: p.type, size: p.size })),
         }),
       }).then(readJson);
       if (init.error) throw new Error(init.error);
 
-      // 2. Send each file in chunks (Cloudflare rejects requests over 100MB)
-      const totalBytes = uploadFiles.reduce((acc, f) => acc + f.size, 0) || 1;
-      let doneBytes = 0;
-      for (let i = 0; i < uploadFiles.length; i++) {
-        const file = uploadFiles[i];
-        let offset = 0;
-        let failures = 0;
-        let lastError = "";
-        while (offset < file.size) {
-          const chunk = file.slice(offset, offset + UPLOAD_CHUNK_SIZE);
-          const res = await sendChunk(`/api/upload/${init.id}/${i}?offset=${offset}`, chunk, (loaded) => {
-            setUploadProgress(Math.round(base + ((doneBytes + offset + loaded) / totalBytes) * range));
-          }).catch((err: Error) => { lastError = err.message; return null; });
-
-          if (res?.received !== undefined) {
-            // 409 also reports how much the server already has, so resume from there
-            offset = res.received;
-            failures = res.error ? failures + 1 : 0;
-          } else {
-            failures++;
+      // 2. Send the files in 50MB pieces (Cloudflare rejects requests over 100MB),
+      //    a few files at a time
+      const totalBytes = plans.reduce((acc, p) => acc + p.size, 0) || 1;
+      const sent = plans.map(() => 0);
+      let nextFile = 0;
+      let failed = false;
+      const worker = async () => {
+        while (!failed && nextFile < plans.length) {
+          const i = nextFile++;
+          try {
+            await uploadPieces(init.id, i, plans[i], (bytes) => {
+              sent[i] = bytes;
+              setUploadProgress(Math.round((sent.reduce((a, b) => a + b, 0) / totalBytes) * 100));
+            });
+          } catch (err) {
+            failed = true;
+            throw err;
           }
-          if (res?.error && res.received === undefined) throw new Error(res.error);
-          if (failures >= 3) throw new Error(lastError || res?.error || "업로드에 실패했습니다.");
         }
-        doneBytes += file.size;
-      }
+      };
+      await Promise.all(Array.from({ length: Math.min(PARALLEL_FILE_UPLOADS, plans.length) }, worker));
 
       // 3. Finish: the server moves the files into place and issues the code
       const result = await fetch(`/api/upload/${init.id}/complete`, { method: "POST" }).then(readJson);
@@ -245,6 +293,18 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   };
 
   const handleDownloadSingleFile = async (file: any) => {
+    // Unencrypted files: let the browser download natively, so it streams to disk
+    // and shows its own progress instead of buffering the whole file in memory
+    if (!file.isEncrypted) {
+      const a = document.createElement("a");
+      a.href = `/api/download/${file.id}`;
+      a.download = file.originalName || "";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      return;
+    }
+
     setActiveDownloadId(file.id);
     try {
       const res = await fetch(`/api/download/${file.id}`);
@@ -267,12 +327,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       const url = window.URL.createObjectURL(finalBlob);
       const a = document.createElement("a");
       a.href = url;
-      let filename = file.originalName || "download";
-      const disposition = res.headers.get("Content-Disposition");
-      if (disposition && disposition.indexOf("filename=") !== -1) {
-        filename = decodeURIComponent(disposition.split("filename=")[1].replace(/['"]/g, ""));
-      }
-      a.download = filename;
+      a.download = file.originalName || "download";
       document.body.appendChild(a);
       a.click();
       a.remove();

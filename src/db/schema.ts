@@ -1,4 +1,4 @@
-import { integer, pgTable, text, primaryKey, timestamp, boolean, bigint } from "drizzle-orm/pg-core"
+import { integer, pgTable, text, primaryKey, timestamp, boolean, bigint, index } from "drizzle-orm/pg-core"
 import type { AdapterAccountType } from "next-auth/adapters"
 
 export const users = pgTable("user", {
@@ -76,4 +76,8 @@ export const files = pgTable("file", {
   isEncrypted: boolean("isEncrypted").default(false),
 
   createdAt: timestamp("createdAt", { mode: "date" }).notNull().defaultNow(),
-})
+}, (file) => [
+  index("file_downloadCode_idx").on(file.downloadCode), // code lookup
+  index("file_uploaderId_idx").on(file.uploaderId), // "my files" list
+  index("file_expiresAt_idx").on(file.expiresAt), // expiry worker
+])

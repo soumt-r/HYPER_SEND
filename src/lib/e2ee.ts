@@ -21,29 +21,37 @@ export async function deriveKey(password: string, salt: any) {
   );
 }
 
+// Encrypted file format: salt(16) + for each 5MB plaintext block: iv(12) + ciphertext + tag(16)
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB original chunks
+export const E2EE_BLOCK_SIZE = CHUNK_SIZE;
+const SALT_BYTES = 16;
+const BLOCK_OVERHEAD = 12 + 16;
 
-export async function encryptFile(file: File, password: string): Promise<File> {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await deriveKey(password, salt);
-  
-  const blobs: Blob[] = [new Blob([salt])];
-  
-  for (let offset = 0; offset < file.size; offset += CHUNK_SIZE) {
-    const chunk = file.slice(offset, offset + CHUNK_SIZE);
-    const buffer = await chunk.arrayBuffer();
-    
+/** Encrypted size of the piece covering plaintext bytes [start, end), as produced by encryptRange. */
+export function encryptedRangeSize(start: number, end: number) {
+  return (start === 0 ? SALT_BYTES : 0) + (end - start) + BLOCK_OVERHEAD * Math.ceil((end - start) / CHUNK_SIZE);
+}
+
+/** Per-file salt and key; encrypt the file piece by piece with encryptRange. */
+export async function createFileKey(password: string) {
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
+  return { salt, key: await deriveKey(password, salt) };
+}
+
+/**
+ * Encrypt plaintext bytes [start, end) of a file. `start` must be block-aligned.
+ * The piece starting at 0 is prefixed with the salt, so concatenating all pieces
+ * in order gives the same format as encrypting the whole file at once.
+ */
+export async function encryptRange(file: Blob, start: number, end: number, fileKey: { salt: Uint8Array<ArrayBuffer>; key: CryptoKey }) {
+  const blobs: BlobPart[] = start === 0 ? [fileKey.salt] : [];
+  for (let offset = start; offset < end; offset += CHUNK_SIZE) {
+    const buffer = await file.slice(offset, Math.min(offset + CHUNK_SIZE, end)).arrayBuffer();
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encrypted = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: iv },
-      key,
-      buffer
-    );
-    
-    blobs.push(new Blob([iv, encrypted]));
+    const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, fileKey.key, buffer);
+    blobs.push(iv, encrypted);
   }
-  
-  return new File(blobs, file.name, { type: file.type || 'application/octet-stream' });
+  return new Blob(blobs);
 }
 
 export async function decryptBlob(blob: Blob, password: string): Promise<Blob> {

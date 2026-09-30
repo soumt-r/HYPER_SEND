@@ -14,7 +14,9 @@ export function parseExpiry(type: unknown, value: unknown): Expiry | null {
   }
   if (type === "COUNT") {
     if (n > MAX_DOWNLOAD_COUNT) return null;
-    return { expiresAt: null, maxDownloads: n };
+    // Count-limited files are still removed after the maximum retention period,
+    // so files nobody downloads don't stay on disk forever
+    return { expiresAt: new Date(Date.now() + MAX_EXPIRE_HOURS * 60 * 60 * 1000), maxDownloads: n };
   }
   return null;
 }

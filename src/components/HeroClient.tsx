@@ -1,6 +1,7 @@
 "use client";
 
-import { motion, AnimatePresence } from "framer-motion";
+// LazyMotion + m: only the DOM animation features used here are bundled
+import { LazyMotion, domAnimation, m, AnimatePresence } from "framer-motion";
 import { ArrowRight, UploadCloud, Lock, Key, Clock, Hash, ShieldCheck, X, Download, Server } from "lucide-react";
 import Image from "next/image";
 import { useState, useTransition, useRef, useEffect } from "react";
@@ -10,7 +11,10 @@ import { loginWithGoogle, logout } from "@/app/actions/auth";
 import { deleteFileAction } from "@/app/actions/manage";
 import { createFileKey, decryptBlob, encryptRange, encryptedRangeSize } from "@/lib/e2ee";
 import { MAX_DOWNLOAD_COUNT, MAX_EXPIRE_HOURS } from "@/lib/expiry";
-import { QRCodeSVG } from "qrcode.react";
+import dynamic from "next/dynamic";
+
+// Only needed after an upload finishes, so load it on demand
+const QRCodeSVG = dynamic(() => import("qrcode.react").then((mod) => mod.QRCodeSVG), { ssr: false });
 
 const OrbitSVG = () => (
   <svg viewBox="0 0 600 800" className="w-full h-full overflow-visible">
@@ -50,7 +54,7 @@ const ShootingStars = () => {
   return (
     <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
       {stars.map((star) => (
-        <motion.div
+        <m.div
           key={star.id}
           className="absolute w-[1px] h-[180px] bg-gradient-to-b from-transparent to-[#CCCCCC]"
           style={{ top: star.top, left: star.left, rotate: "45deg", transformOrigin: "top center" }}
@@ -97,17 +101,23 @@ async function planUpload(file: File, password: string): Promise<UploadPlan> {
 }
 
 // Send a file's pieces in order, retrying and resuming from what the server already has
-async function uploadPieces(sessionId: string, index: number, plan: UploadPlan, onProgress: (bytes: number) => void) {
+async function uploadPieces(sessionId: string, index: number, plan: UploadPlan, onProgress: (bytes: number) => void, signal: AbortSignal) {
   let i = 0;
   let failures = 0;
   let lastError = "";
   while (i < plan.pieces.length) {
+    signal.throwIfAborted();
     const piece = plan.pieces[i];
     const res = await sendChunk(
       `/api/upload/${sessionId}/${index}?offset=${piece.start}&length=${piece.length}`,
       await piece.data(),
       (loaded) => onProgress(piece.start + loaded),
-    ).catch((err: Error) => { lastError = err.message; return null; });
+      signal,
+    ).catch((err: Error) => {
+      if (signal.aborted) throw err;
+      lastError = err.message;
+      return null;
+    });
 
     if (res?.received !== undefined) {
       if (res.error) {
@@ -141,10 +151,12 @@ async function readJson(res: Response) {
 }
 
 // XHR instead of fetch for upload progress events
-function sendChunk(url: string, chunk: Blob, onProgress: (loaded: number) => void) {
+function sendChunk(url: string, chunk: Blob, onProgress: (loaded: number) => void, signal: AbortSignal) {
   return new Promise<{ received?: number; error?: string }>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", url);
+    signal.addEventListener("abort", () => xhr.abort(), { once: true });
+    xhr.onabort = () => reject(new DOMException("Upload cancelled", "AbortError"));
     xhr.upload.onprogress = (e) => onProgress(e.loaded);
     xhr.onload = () => {
       try { resolve(JSON.parse(xhr.responseText)); }
@@ -193,6 +205,21 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   const [uploadResult, setUploadResult] = useState<string>("");
   const [uploadProgress, setUploadProgress] = useState(0); // 0~100
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // While the upload modal is open, a file dropped outside the drop zone would
+  // make the browser open it and leave the page
+  useEffect(() => {
+    if (activeModal !== "UPLOAD") return;
+    const prevent = (e: DragEvent) => e.preventDefault();
+    window.addEventListener("dragover", prevent);
+    window.addEventListener("drop", prevent);
+    return () => {
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
+    };
+  }, [activeModal]);
 
 
   const [isPending, startTransition] = useTransition();
@@ -208,19 +235,44 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   const myBundles = groupFilesByCode(initialFiles);
   const adminBundles = isAdmin && adminData ? groupFilesByCode(adminData.allFiles) : {};
 
+  const addFiles = (picked: File[]) => {
+    if (picked.length === 0) return;
+    setSelectedFiles(prev => [...prev, ...picked]);
+    setUploadState("IDLE");
+  };
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     // Copy the FileList now: resetting the input below empties it, and the
     // state updater may run later
-    const picked = Array.from(e.target.files ?? []);
-    if (picked.length > 0) {
-      setSelectedFiles(prev => [...prev, ...picked]);
-      setUploadState("IDLE");
-    }
+    addFiles(Array.from(e.target.files ?? []));
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const isUploading = uploadState === "UPLOADING" || uploadState === "ENCRYPTING";
+
+  // Drag and drop onto the file area
+  const dropZoneProps = {
+    onDragOver: (e: React.DragEvent) => {
+      e.preventDefault();
+      if (!isUploading) setIsDragging(true);
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragging(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      if (!isUploading) addFiles(Array.from(e.dataTransfer.files));
+    },
   };
 
   const handleUpload = async () => {
     if (selectedFiles.length === 0) return;
+
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
+    const { signal } = controller;
+    let sessionId: string | null = null;
 
     try {
       const password = uploadPassword;
@@ -238,8 +290,10 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
           isEncrypted: password.length > 0,
           files: plans.map(p => ({ name: p.name, type: p.type, size: p.size })),
         }),
+        signal,
       }).then(readJson);
       if (init.error) throw new Error(init.error);
+      sessionId = init.id;
 
       // 2. Send the files in 50MB pieces (Cloudflare rejects requests over 100MB),
       //    a few files at a time
@@ -254,7 +308,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
             await uploadPieces(init.id, i, plans[i], (bytes) => {
               sent[i] = bytes;
               setUploadProgress(Math.round((sent.reduce((a, b) => a + b, 0) / totalBytes) * 100));
-            });
+            }, signal);
           } catch (err) {
             failed = true;
             throw err;
@@ -264,7 +318,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       await Promise.all(Array.from({ length: Math.min(PARALLEL_FILE_UPLOADS, plans.length) }, worker));
 
       // 3. Finish: the server moves the files into place and issues the code
-      const result = await fetch(`/api/upload/${init.id}/complete`, { method: "POST" }).then(readJson);
+      const result = await fetch(`/api/upload/${init.id}/complete`, { method: "POST", signal }).then(readJson);
       if (result.error) throw new Error(result.error);
 
       setUploadProgress(100);
@@ -274,10 +328,21 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       setUploadPassword("");
       router.refresh(); // reload the file list and quota
     } catch (err: any) {
-      setUploadState("ERROR");
-      setUploadResult(err.message || "An unexpected error occurred");
+      if (signal.aborted) {
+        // Cancelled: free the server-side session now instead of waiting for cleanup
+        if (sessionId) fetch(`/api/upload/${sessionId}`, { method: "DELETE", keepalive: true }).catch(() => {});
+        setUploadState("IDLE");
+        setUploadProgress(0);
+      } else {
+        setUploadState("ERROR");
+        setUploadResult(err.message || "An unexpected error occurred");
+      }
+    } finally {
+      uploadAbortRef.current = null;
     }
   };
+
+  const cancelUpload = () => uploadAbortRef.current?.abort();
 
   const handleSearchCode = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -389,9 +454,9 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   const isAnyFileEncryptedInModal = foundFiles.some(f => f.isEncrypted);
 
   return (
-    <>
+    <LazyMotion features={domAnimation}>
       <ShootingStars />
-      <header className="w-full p-8 md:px-12 z-10 flex justify-between items-start">
+      <header className="w-full p-6 sm:p-8 md:px-12 z-10 flex justify-between items-start gap-4">
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
             <HyperLogoSVG />
@@ -399,7 +464,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
           </div>
           <span className="font-mono text-[9px] text-[#999999] tracking-widest">For Hanyang University</span>
         </div>
-        <nav className="flex items-center gap-8">
+        <nav className="flex items-center gap-4 sm:gap-8">
           {mounted && (
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -410,7 +475,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
           )}
           {session?.user ? (
             <div className="flex items-center gap-4">
-              <span className="font-mono text-[10px] text-[#888888]">{session.user.email}</span>
+              <span className="hidden sm:inline font-mono text-[10px] text-[#888888]">{session.user.email}</span>
               {isAdmin && (
                 <a href="/admin" className="font-mono text-xs text-[#2549BB] hover:text-[#172B66] font-bold transition-colors">
                   [ Admin ]
@@ -451,18 +516,18 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
             학교 계정으로 올리고, 코드만 알려주면 <span className="whitespace-nowrap">누구나 받을 수 있어요.</span>
           </p>
 
-          <div className="mt-12 flex gap-4">
+          <div className="mt-12 flex flex-wrap gap-3 sm:gap-4">
             {/* RECEIVE: dark bg = white, white text = dark */}
             <button
               onClick={() => setActiveModal("DOWNLOAD")}
-              className="px-6 py-4 bg-[#111111] dark:bg-white text-white dark:text-[#111111] font-mono text-[10px] tracking-widest hover:bg-[#333333] dark:hover:bg-[#DDDDDD] transition-colors"
+              className="whitespace-nowrap px-6 py-4 bg-[#111111] dark:bg-white text-white dark:text-[#111111] font-mono text-[10px] tracking-widest hover:bg-[#333333] dark:hover:bg-[#DDDDDD] transition-colors"
             >
               [ RECEIVE_FILES ]
             </button>
             {session?.user && (
               <button
                 onClick={() => setActiveModal("UPLOAD")}
-                className="px-6 py-4 bg-white dark:bg-[#1A1A1A] border-[0.5px] border-[#111111] dark:border-[#555555] text-[#111111] dark:text-white font-mono text-[10px] tracking-widest hover:bg-[#FAFAFA] dark:hover:bg-[#222222] transition-colors"
+                className="whitespace-nowrap px-6 py-4 bg-white dark:bg-[#1A1A1A] border-[0.5px] border-[#111111] dark:border-[#555555] text-[#111111] dark:text-white font-mono text-[10px] tracking-widest hover:bg-[#FAFAFA] dark:hover:bg-[#222222] transition-colors"
               >
                 [ SEND_FILES ]
               </button>
@@ -470,7 +535,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
             {session?.user && (
               <button
                 onClick={() => setActiveModal("MANAGE")}
-                className="px-6 py-4 bg-transparent border-[0.5px] border-[#DDDDDD] dark:border-[#444444] text-[#999999] font-mono text-[10px] tracking-widest hover:border-[#111111] dark:hover:border-white hover:text-[#111111] dark:hover:text-white transition-colors"
+                className="whitespace-nowrap px-6 py-4 bg-transparent border-[0.5px] border-[#DDDDDD] dark:border-[#444444] text-[#999999] font-mono text-[10px] tracking-widest hover:border-[#111111] dark:hover:border-white hover:text-[#111111] dark:hover:text-white transition-colors"
               >
                 [ MY_FILES ]
               </button>
@@ -485,20 +550,20 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
             <div className="absolute -top-1.5 -right-1.5 text-[#CCCCCC] dark:text-[#444444] font-mono text-xs">+</div>
           </div>
           <div className="absolute inset-0 z-0 opacity-80"><OrbitSVG /></div>
-          <motion.div
+          <m.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 1.2, ease: "easeOut" }}
             className="absolute inset-0 z-10"
           >
             <Image src="/illustration.png" alt="Mascot Illustration" fill className="object-contain object-bottom opacity-90 mix-blend-multiply dark:mix-blend-normal drop-shadow-sm" priority />
-          </motion.div>
+          </m.div>
           <div className="absolute inset-0 z-20 opacity-80" style={{ clipPath: 'polygon(0 52%, 100% 52%, 100% 100%, 0 100%)' }}>
             <OrbitSVG />
           </div>
 
           {session?.user && (
-            <motion.div
+            <m.div
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.8, duration: 1 }}
@@ -514,7 +579,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
               <div className="text-[8px] font-mono text-[#BBBBBB] tracking-widest mt-1">
                 {usedGB}GB / {quotaGB}GB
               </div>
-            </motion.div>
+            </m.div>
           )}
         </div>
       </div>
@@ -522,14 +587,14 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       {/* FULLSCREEN MODAL OVERLAY */}
       <AnimatePresence>
         {activeModal !== "NONE" && (
-          <motion.div
+          <m.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
             className="fixed inset-0 z-[100] flex items-center justify-center bg-[#FAFAFA]/90 dark:bg-[#111111]/90 backdrop-blur-sm p-4"
           >
-            <motion.div
+            <m.div
               initial={{ scale: 0.95, y: 15, opacity: 0 }}
               animate={{ scale: 1, y: 0, opacity: 1 }}
               exit={{ scale: 0.95, y: 15, opacity: 0 }}
@@ -688,7 +753,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                       </button>
                     </div>
                   ) : selectedFiles.length > 0 ? (
-                    <div className="flex flex-col gap-2">
+                    <div {...dropZoneProps} className={`flex flex-col gap-2 transition-opacity ${isDragging ? "opacity-60" : ""}`}>
                       <div className="flex justify-between items-end mb-1">
                         <span className="font-mono text-[10px] text-[#111111] dark:text-white uppercase tracking-widest">{selectedFiles.length} FILES READY</span>
                         <div className="flex gap-3">
@@ -712,11 +777,12 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                     </div>
                   ) : (
                     <div
+                      {...dropZoneProps}
                       onClick={() => fileInputRef.current?.click()}
-                      className="w-full h-[100px] border-[0.5px] border-dashed border-[#CCCCCC] dark:border-[#555555] bg-[#FAFAFA] dark:bg-[#111111] flex flex-col items-center justify-center cursor-pointer hover:border-[#999999] dark:hover:border-[#888888] transition-colors group px-4"
+                      className={`w-full h-[100px] border-[0.5px] border-dashed ${isDragging ? "border-[#2549BB] bg-[#F2F5FD] dark:bg-[#161B2B]" : "border-[#CCCCCC] dark:border-[#555555] bg-[#FAFAFA] dark:bg-[#111111]"} flex flex-col items-center justify-center cursor-pointer hover:border-[#999999] dark:hover:border-[#888888] transition-colors group px-4`}
                     >
                       <UploadCloud size={20} strokeWidth={1} className="text-[#999999] group-hover:text-[#111111] dark:group-hover:text-white transition-colors mb-2" />
-                      <span className="font-mono text-[10px] text-[#999999] tracking-widest truncate w-full text-center">SELECT_FILES</span>
+                      <span className="font-mono text-[10px] text-[#999999] tracking-widest truncate w-full text-center">{isDragging ? "DROP_FILES_HERE" : "SELECT_OR_DROP_FILES"}</span>
                     </div>
                   )}
 
@@ -754,6 +820,9 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                           />
                         </div>
                       </div>
+                      <div className="font-mono text-[9px] text-[#999999] -mt-3">
+                        파일은 조건과 관계없이 최대 {MAX_EXPIRE_HOURS / 24}일 뒤 자동으로 삭제돼요.
+                      </div>
 
                       <div className="relative">
                         <div className="font-mono text-[9px] text-[#999999] uppercase tracking-widest flex items-center gap-1 mb-1.5">
@@ -770,7 +839,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
 
                       <button
                         onClick={handleUpload}
-                        disabled={selectedFiles.length === 0 || uploadState === "UPLOADING" || uploadState === "ENCRYPTING"}
+                        disabled={selectedFiles.length === 0 || isUploading}
                         className="w-full mt-2 py-3 border-[0.5px] border-[#111111] dark:border-[#555555] bg-[#111111] dark:bg-white text-white dark:text-[#111111] font-mono text-[10px] tracking-widest hover:bg-transparent hover:text-[#111111] dark:hover:bg-transparent dark:hover:text-white dark:hover:border-white transition-colors disabled:opacity-50 relative overflow-hidden"
                       >
                         {selectedFiles.length === 0
@@ -781,13 +850,22 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                           ? `[ UPLOADING... ${uploadProgress}% ]`
                           : "[ START_UPLOAD ]"}
                         {(uploadState === "UPLOADING" || uploadState === "ENCRYPTING") && (
-                          <motion.div
+                          <m.div
                             className="absolute bottom-0 left-0 h-[2px] bg-white dark:bg-[#111111] opacity-70"
                             style={{ width: `${uploadProgress}%` }}
                             transition={{ duration: 0.3, ease: "easeOut" }}
                           />
                         )}
                       </button>
+
+                      {isUploading && (
+                        <button
+                          onClick={cancelUpload}
+                          className="-mt-2 font-mono text-[9px] text-[#999999] hover:text-red-500 tracking-widest uppercase transition-colors"
+                        >
+                          [ CANCEL ]
+                        </button>
+                      )}
 
                       {uploadState === "ERROR" && (
                         <div className="font-mono text-[10px] text-red-500 text-center">{uploadResult}</div>
@@ -846,10 +924,10 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                   </div>
                 </>
               )}
-            </motion.div>
-          </motion.div>
+            </m.div>
+          </m.div>
         )}
       </AnimatePresence>
-    </>
+    </LazyMotion>
   );
 }

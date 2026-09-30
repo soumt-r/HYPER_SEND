@@ -1,8 +1,16 @@
+# Cap container logs so they can't fill the disk
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   hyper-send:
     image: ${HYPER_SEND_IMAGE:-ghcr.io/soumt-r/hyper_send:latest}
     container_name: hyper-send
     restart: unless-stopped
+    logging: *logging
     ports:
       # Only reachable from the host (cloudflared); keeps CF-Connecting-IP trustworthy
       - "127.0.0.1:3000:3000"
@@ -25,6 +33,7 @@ services:
   db:
     image: postgres:15-alpine
     container_name: hypersend_db
+    logging: *logging
     environment:
       POSTGRES_USER: hyper_user
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -41,10 +50,10 @@ services:
   redis:
     image: redis:7-alpine
     container_name: hypersend_redis
-    volumes:
-      - redisdata:/data
+    # Only holds short-lived rate-limit counters: no persistence, bounded memory
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "volatile-ttl"]
+    logging: *logging
     restart: unless-stopped
 
 volumes:
   pgdata:
-  redisdata:

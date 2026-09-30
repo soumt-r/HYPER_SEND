@@ -25,7 +25,7 @@
 | **번들 업로드** | 한 번에 최대 20개 · 파일당 최대 2GB, 묶음 하나에 8자리 코드 하나. 50MB 단위로 나눠 올려서 Cloudflare 요청 크기 제한에 걸리지 않아요 |
 | **코드로 다운로드** | 링크 대신 `A1B2C3D4` 같은 코드만 알려주면 끝 |
 | **종단간 암호화 (선택)** | 비밀번호를 걸면 브라우저에서 AES-256-GCM으로 암호화한 뒤 업로드 — 서버는 내용을 볼 수 없어요 (파일 이름·형식·크기는 암호화되지 않습니다) |
-| **자동 만료** | 다운로드 1–100회 또는 1–168시간 기준으로 만료, 백그라운드 워커가 알아서 정리 |
+| **자동 만료** | 다운로드 1–100회 또는 1–168시간 기준으로 만료, 어떤 조건이든 최대 7일 뒤 삭제 |
 | **학교 계정 로그인** | `@hanyang.ac.kr` 구글 계정으로 로그인, 사용자별 5GB 용량 |
 | **다크 모드** | 라이트 / 다크 테마 지원 |
 
@@ -52,7 +52,21 @@ docker compose up -d
 
 DB 스키마는 컨테이너가 시작될 때 자동으로 생성·마이그레이션됩니다. 도메인이 다르다면 `docker-compose.yml`의 `NEXTAUTH_URL` / `AUTH_URL`도 바꿔주세요. 업로드된 파일은 `./uploads`에 저장됩니다.
 
-앱 포트는 `127.0.0.1:3000`에만 열리며, Cloudflare Tunnel(`cloudflared`)이 호스트에서 `http://localhost:3000`으로 연결하는 구성을 전제로 합니다. 요청 제한은 `CF-Connecting-IP` 기준으로 동작합니다.
+앱 포트는 `127.0.0.1:3000`에만 열리며, Cloudflare Tunnel(`cloudflared`)이 호스트에서 `http://localhost:3000`으로 연결하는 구성을 전제로 합니다. 요청 제한은 `CF-Connecting-IP` 기준으로 동작하며, 잘못된 다운로드 코드를 10번 입력하면 15분간 조회가 막힙니다.
+
+### 백업
+
+백업 대상은 DB와 `./uploads` 두 가지입니다. Redis는 짧게 쓰는 요청 제한 카운터만 들고 있어서 백업할 필요가 없어요.
+
+```bash
+# DB
+docker compose exec -T db pg_dump -U hyper_user hyper_send | gzip > hyper_send_$(date +%F).sql.gz
+
+# 업로드된 파일 (진행 중인 업로드의 임시 파일은 제외)
+tar czf uploads_$(date +%F).tar.gz --exclude=uploads/.tmp uploads
+```
+
+복원할 때는 `gunzip -c hyper_send_날짜.sql.gz | docker compose exec -T db psql -U hyper_user hyper_send`로 DB를 되살리고 `uploads` 폴더를 제자리에 풀면 됩니다.
 
 ## 로컬 개발
 

@@ -52,6 +52,29 @@ export async function rateLimit(
 }
 
 /**
+ * Lockout for repeated failures (e.g. wrong download codes): after `max` failures
+ * within `windowSeconds`, the key stays locked until the window expires.
+ * Fails open if Redis is unreachable, like rateLimit.
+ */
+export async function isLockedOut(key: string, max: number): Promise<boolean> {
+  try {
+    const count = Number(await getRedis().get(`fail:${key}`));
+    return count >= max;
+  } catch {
+    return false;
+  }
+}
+
+export async function recordFailure(key: string, windowSeconds: number): Promise<void> {
+  try {
+    const redis = getRedis();
+    const redisKey = `fail:${key}`;
+    const count = await redis.incr(redisKey);
+    if (count === 1) await redis.expire(redisKey, windowSeconds);
+  } catch {}
+}
+
+/**
  * Resolve the real client IP behind Cloudflare Tunnel.
  * CF-Connecting-IP is set by Cloudflare and can't be forged as long as the app
  * port is only reachable through the tunnel (bound to 127.0.0.1 in docker-compose).

@@ -1,21 +1,33 @@
-import Redis from "ioredis";
+// In-memory rate limiting. The app runs as a single process, so counters kept in
+// memory are shared by every request. They reset when the app restarts, which is
+// fine for short windows like these. (Running several app instances would need a
+// shared store such as Redis instead.)
 
-// Singleton Redis client
-let redisClient: Redis | null = null;
+type Store = {
+  hits: Map<string, number[]>; // sliding-window request timestamps
+  failures: Map<string, { count: number; resetAt: number }>;
+};
 
-export function getRedis(): Redis {
-  if (!redisClient) {
-    redisClient = new Redis(process.env.REDIS_URL || "redis://localhost:6379", {
-      maxRetriesPerRequest: 1,
-      connectTimeout: 2000,
-      lazyConnect: true,
-    });
-    redisClient.on("error", (err) => {
-      // Swallow connection errors so the app degrades gracefully
-      console.error("[Redis] Connection error:", err.message);
-    });
-  }
-  return redisClient;
+// Kept on globalThis so every route module (and dev hot reloads) share one store
+const globalStore = globalThis as typeof globalThis & { __rateLimitStore?: Store };
+const store: Store = globalStore.__rateLimitStore ??= { hits: new Map(), failures: new Map() };
+
+const SWEEP_INTERVAL_MS = 60 * 1000;
+const MAX_WINDOW_MS = 60 * 60 * 1000;
+
+// Drop entries that can no longer affect any decision, so memory stays bounded
+const globalTimer = globalThis as typeof globalThis & { __rateLimitSweep?: NodeJS.Timeout };
+if (!globalTimer.__rateLimitSweep) {
+  globalTimer.__rateLimitSweep = setInterval(() => {
+    const now = Date.now();
+    for (const [key, times] of store.hits) {
+      if (times.length === 0 || times[times.length - 1] < now - MAX_WINDOW_MS) store.hits.delete(key);
+    }
+    for (const [key, entry] of store.failures) {
+      if (entry.resetAt <= now) store.failures.delete(key);
+    }
+  }, SWEEP_INTERVAL_MS);
+  globalTimer.__rateLimitSweep.unref?.();
 }
 
 /**
@@ -27,51 +39,35 @@ export async function rateLimit(
   limit: number,
   windowSeconds: number
 ): Promise<{ allowed: boolean; remaining: number }> {
-  const redis = getRedis();
-  const redisKey = `rl:${key}`;
+  const now = Date.now();
+  const windowStart = now - windowSeconds * 1000;
 
-  try {
-    const now = Date.now();
-    const windowStart = now - windowSeconds * 1000;
+  const times = (store.hits.get(key) ?? []).filter((t) => t > windowStart);
+  times.push(now);
+  store.hits.set(key, times);
 
-    // Atomic sliding window with sorted set
-    const pipe = redis.pipeline();
-    pipe.zremrangebyscore(redisKey, 0, windowStart);
-    pipe.zadd(redisKey, now, `${now}-${Math.random()}`);
-    pipe.zcard(redisKey);
-    pipe.expire(redisKey, windowSeconds + 1);
-    const results = await pipe.exec();
-
-    const count = (results?.[2]?.[1] as number) ?? 0;
-    const remaining = Math.max(0, limit - count);
-    return { allowed: count <= limit, remaining };
-  } catch {
-    // If Redis is unreachable, fail open (allow the request)
-    return { allowed: true, remaining: limit };
-  }
+  const count = times.length;
+  return { allowed: count <= limit, remaining: Math.max(0, limit - count) };
 }
 
 /**
  * Lockout for repeated failures (e.g. wrong download codes): after `max` failures
  * within `windowSeconds`, the key stays locked until the window expires.
- * Fails open if Redis is unreachable, like rateLimit.
  */
 export async function isLockedOut(key: string, max: number): Promise<boolean> {
-  try {
-    const count = Number(await getRedis().get(`fail:${key}`));
-    return count >= max;
-  } catch {
-    return false;
-  }
+  const entry = store.failures.get(key);
+  if (!entry || entry.resetAt <= Date.now()) return false;
+  return entry.count >= max;
 }
 
 export async function recordFailure(key: string, windowSeconds: number): Promise<void> {
-  try {
-    const redis = getRedis();
-    const redisKey = `fail:${key}`;
-    const count = await redis.incr(redisKey);
-    if (count === 1) await redis.expire(redisKey, windowSeconds);
-  } catch {}
+  const now = Date.now();
+  const entry = store.failures.get(key);
+  if (!entry || entry.resetAt <= now) {
+    store.failures.set(key, { count: 1, resetAt: now + windowSeconds * 1000 });
+  } else {
+    entry.count++;
+  }
 }
 
 /**

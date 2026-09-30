@@ -11,7 +11,6 @@
 <a href="https://hyps.soumt.moe"><img src="https://img.shields.io/badge/live-hyps.soumt.moe-2549BB?style=flat-square" alt="live" /></a>
 <img src="https://img.shields.io/badge/Next.js-16-111111?style=flat-square&logo=nextdotjs" alt="Next.js 16" />
 <img src="https://img.shields.io/badge/PostgreSQL-15-111111?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL" />
-<img src="https://img.shields.io/badge/Redis-7-111111?style=flat-square&logo=redis&logoColor=white" alt="Redis" />
 <a href="https://github.com/soumt-r/HYPER_SEND/pkgs/container/hyper_send"><img src="https://img.shields.io/badge/ghcr.io-hyper__send-111111?style=flat-square&logo=docker&logoColor=white" alt="Docker image" /></a>
 
 </div>
@@ -56,7 +55,7 @@ DB 스키마는 컨테이너가 시작될 때 자동으로 생성·마이그레�
 
 ### 백업
 
-백업 대상은 DB와 `./uploads` 두 가지입니다. Redis는 짧게 쓰는 요청 제한 카운터만 들고 있어서 백업할 필요가 없어요.
+백업 대상은 DB와 `./uploads` 두 가지입니다.
 
 ```bash
 # DB
@@ -72,14 +71,14 @@ tar czf uploads_$(date +%F).tar.gz --exclude=uploads/.tmp uploads
 
 ```bash
 npm install
-# .env.local에 DATABASE_URL, REDIS_URL, AUTH_* 설정
+# .env.local에 DATABASE_URL, AUTH_* 설정
 npx drizzle-kit push   # 로컬 DB에 스키마 반영
 npm run dev
 ```
 
 스키마(`src/db/schema.ts`)를 바꿨다면 `npx drizzle-kit generate`로 `drizzle/`에 마이그레이션을 추가해 함께 커밋하세요. 배포 시 자동으로 적용됩니다.
 
-**Stack** — Next.js 16 (App Router, standalone) · Auth.js · Drizzle ORM · PostgreSQL · Redis (rate limit) · Tailwind CSS 4 · Framer Motion
+**Stack** — Next.js 16 (App Router, standalone) · Auth.js · Drizzle ORM · PostgreSQL · Tailwind CSS 4 · Framer Motion
 
 ---
 

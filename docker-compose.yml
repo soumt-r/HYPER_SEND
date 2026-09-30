@@ -20,15 +20,12 @@ services:
       - ./uploads:/app/uploads
     environment:
       - DATABASE_URL=postgres://hyper_user:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/hyper_send
-      - REDIS_URL=redis://redis:6379
       - NEXTAUTH_URL=https://hyps.soumt.moe
       - AUTH_URL=https://hyps.soumt.moe
       - AUTH_TRUST_HOST=true
     depends_on:
       db:
         condition: service_healthy
-      redis:
-        condition: service_started
 
   db:
     image: postgres:15-alpine
@@ -45,14 +42,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    container_name: hypersend_redis
-    # Only holds short-lived rate-limit counters: no persistence, bounded memory
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "volatile-ttl"]
-    logging: *logging
     restart: unless-stopped
 
 volumes:

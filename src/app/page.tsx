@@ -35,7 +35,7 @@ export default async function Home() {
       <footer className="w-full p-8 md:px-12 z-10 flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mt-auto">
         <div className="flex flex-col items-start gap-4 max-w-xl">
           <p className="text-[10px] text-[#999999] leading-relaxed break-keep font-sans">
-            HYPER_SEND는 한양대학교의 브랜딩을 사용하고 한양대학교 ERICA 학생이 제작하였지만, 대학 본부의 공식적인 인가를 받은 서비스는 아니에요.
+            HYPER_SEND는 한양대학교 ERICA 학생이 개인적으로 만들어 운영하는 서비스예요. 한양대학교의 공식 서비스가 아니며, 학교의 승인이나 지원을 받지 않았어요.
           </p>
         </div>
         <div className="flex flex-col md:items-end gap-2 font-mono text-[9px] text-[#999999] uppercase tracking-widest shrink-0">

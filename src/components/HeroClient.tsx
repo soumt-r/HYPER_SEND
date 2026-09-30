@@ -397,7 +397,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
             <HyperLogoSVG />
             <span className="font-bold tracking-tighter text-xl dark:text-white">HYPER_SEND</span>
           </div>
-          <span className="font-mono text-[9px] text-[#999999] tracking-widest uppercase">File Sharing Service</span>
+          <span className="font-mono text-[9px] text-[#999999] tracking-widest">For Hanyang University</span>
         </div>
         <nav className="flex items-center gap-8">
           {mounted && (
@@ -448,7 +448,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
           </h1>
           <p className="mt-10 text-[#666666] dark:text-[#AAAAAA] max-w-md leading-relaxed text-[15px] font-light">
             한양대학교 구성원을 위한 파일 전송 서비스.<br />
-            업로드는 한양인만, 다운로드는 누구나.
+            학교 계정으로 올리고, 코드만 알려주면 <span className="whitespace-nowrap">누구나 받을 수 있어요.</span>
           </p>
 
           <div className="mt-12 flex gap-4">

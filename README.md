@@ -71,7 +71,7 @@ npm run dev
 
 <div align="center">
 <sub>
-HYPER_SEND는 한양대학교의 브랜딩을 사용하고 한양대학교 ERICA 학생이 제작하였지만, 대학 본부의 공식적인 인가를 받은 서비스는 아닙니다.<br/>
+HYPER_SEND는 한양대학교의 브랜딩을 사용하고 한양대학교 ERICA 학생이 제작하였지만, 대학 본부의 공식적인 인가를 받은 서비스는 아니에요.<br/>
 Made by <b>Soumt</b> · 한양대학교 ERICA 국제문화대학 일본학과
 </sub>
 </div>

@@ -39,7 +39,7 @@ export default async function Home() {
         <div className="flex flex-col items-start gap-4 max-w-xl">
           <img src="/hanyang-logo.png" alt="Hanyang University" className="h-6 w-auto grayscale opacity-40 mix-blend-multiply dark:invert dark:opacity-20" />
           <p className="text-[10px] text-[#999999] leading-relaxed break-keep font-sans">
-            HYPER_SEND는 한양대학교의 브랜딩을 사용하고 한양대학교 ERICA 학생이 제작하였지만, 대학 본부의 공식적인 인가를 받은 서비스는 아닙니다.
+            HYPER_SEND는 한양대학교의 브랜딩을 사용하고 한양대학교 ERICA 학생이 제작하였지만, 대학 본부의 공식적인 인가를 받은 서비스는 아니에요.
           </p>
         </div>
         <div className="flex flex-col md:items-end gap-2 font-mono text-[9px] text-[#999999] uppercase tracking-widest shrink-0">

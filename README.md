@@ -48,6 +48,9 @@ docker compose up -d
 | `AUTH_SECRET` | `npx auth secret`으로 생성 |
 | `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Google OAuth 클라이언트 (리디렉션 URI: `https://<도메인>/api/auth/callback/google`) |
 | `ADMIN_EMAIL` | 관리자 페이지에 접근할 이메일 |
+| `CONTACT_EMAIL` | 신고·개인정보 문의 연락처. 하단, 개인정보처리방침, 신고 링크에 표시돼요 |
+| `MIN_FREE_DISK_GB` | 디스크 여유 공간이 이보다 적어지는 업로드는 거부 (기본 2) |
+| `STORAGE_LIMIT_GB` | 저장된 파일 전체 크기 상한 (비우면 제한 없음) |
 
 DB 스키마는 컨테이너가 시작될 때 자동으로 생성·마이그레이션됩니다. 도메인이 다르다면 `docker-compose.yml`의 `NEXTAUTH_URL` / `AUTH_URL`도 바꿔주세요. 업로드된 파일은 `./uploads`에 저장됩니다.
 

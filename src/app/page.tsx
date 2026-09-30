@@ -1,4 +1,5 @@
 import { getVerifiedUser } from "@/lib/session-check";
+import { getContactEmail, isAdminEmail } from "@/lib/site";
 import HeroClient from "@/components/HeroClient";
 import { db } from "@/db";
 import { files } from "@/db/schema";
@@ -11,7 +12,8 @@ export default async function Home() {
   
   let userFiles: any[] = [];
   let usage = { usedBytes: 0, quotaBytes: 0 };
-  const isAdmin = !!verified?.user.email && verified.user.email === process.env.ADMIN_EMAIL;
+  const isAdmin = isAdminEmail(verified?.user.email);
+  const contactEmail = getContactEmail();
 
   if (verified) {
     userFiles = await db.query.files.findMany({
@@ -27,12 +29,11 @@ export default async function Home() {
       {/* Background Grid */}
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#f0f0f0_1px,transparent_1px),linear-gradient(to_bottom,#f0f0f0_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,#222_1px,transparent_1px),linear-gradient(to_bottom,#222_1px,transparent_1px)] bg-[size:32px_32px] opacity-60 z-0 pointer-events-none"></div>
       
-      <HeroClient session={session} initialFiles={userFiles} isAdmin={isAdmin} usage={usage} />
+      <HeroClient session={session} initialFiles={userFiles} isAdmin={isAdmin} usage={usage} contactEmail={contactEmail} />
       
       {/* Footer */}
       <footer className="w-full p-8 md:px-12 z-10 flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mt-auto">
         <div className="flex flex-col items-start gap-4 max-w-xl">
-          <img src="/hanyang-logo.png" alt="Hanyang University" className="h-6 w-auto grayscale opacity-40 mix-blend-multiply dark:invert dark:opacity-20" />
           <p className="text-[10px] text-[#999999] leading-relaxed break-keep font-sans">
             HYPER_SEND는 한양대학교의 브랜딩을 사용하고 한양대학교 ERICA 학생이 제작하였지만, 대학 본부의 공식적인 인가를 받은 서비스는 아니에요.
           </p>
@@ -45,6 +46,9 @@ export default async function Home() {
           <div className="flex gap-4">
             <a href="/privacy" className="hover:text-[#1A1A1A] dark:hover:text-white transition-colors">Privacy Policy</a>
             <a href="/terms" className="hover:text-[#1A1A1A] dark:hover:text-white transition-colors">Terms of Service</a>
+            {contactEmail && (
+              <a href={`mailto:${contactEmail}`} className="hover:text-[#1A1A1A] dark:hover:text-white transition-colors">Contact</a>
+            )}
           </div>
         </div>
       </footer>

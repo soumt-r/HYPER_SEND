@@ -15,13 +15,13 @@ export function isRevoked(loginAt: number | undefined, sessionsValidAfter: Date 
   return (loginAt ?? 0) < Math.floor(sessionsValidAfter.getTime() / 1000);
 }
 
-/** auth() plus the revocation check; null if not signed in, the user is gone, or the token was revoked. */
+/** auth() plus the revocation check; null if not signed in, the user is gone or banned, or the token was revoked. */
 export async function getVerifiedUser() {
   const session = await auth();
   if (!session?.user?.id) return null;
 
   const user = await db.query.users.findFirst({ where: eq(users.id, session.user.id) });
-  if (!user || isRevoked(session.loginAt, user.sessionsValidAfter)) return null;
+  if (!user || user.bannedAt || isRevoked(session.loginAt, user.sessionsValidAfter)) return null;
 
   return { session, user };
 }

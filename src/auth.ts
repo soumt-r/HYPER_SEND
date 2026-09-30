@@ -3,6 +3,7 @@ import Google from "next-auth/providers/google"
 import { DrizzleAdapter } from "@auth/drizzle-adapter"
 import { db } from "./db"
 import { accounts, sessions, users, verificationTokens } from "./db/schema"
+import { eq } from "drizzle-orm"
 
 declare module "next-auth" {
   interface Session {
@@ -47,10 +48,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return session;
     },
     async signIn({ account, profile }) {
-      if (account?.provider === "google") {
-        return profile?.email?.endsWith("@hanyang.ac.kr") ?? false
-      }
-      return true
+      if (account?.provider !== "google") return true
+      const email = profile?.email
+      if (!email?.endsWith("@hanyang.ac.kr")) return false
+
+      // Banned users can't sign back in
+      const existing = await db.query.users.findFirst({
+        where: eq(users.email, email),
+        columns: { bannedAt: true },
+      })
+      return !existing?.bannedAt
     },
   },
   pages: {

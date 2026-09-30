@@ -13,7 +13,8 @@ const globalStore = globalThis as typeof globalThis & { __rateLimitStore?: Store
 const store: Store = globalStore.__rateLimitStore ??= { hits: new Map(), failures: new Map() };
 
 const SWEEP_INTERVAL_MS = 60 * 1000;
-const MAX_WINDOW_MS = 60 * 60 * 1000;
+// Longest window in use (the 15-minute lockout); the privacy policy states IPs are kept no longer
+const MAX_WINDOW_MS = 15 * 60 * 1000;
 
 // Drop entries that can no longer affect any decision, so memory stays bounded
 const globalTimer = globalThis as typeof globalThis & { __rateLimitSweep?: NodeJS.Timeout };

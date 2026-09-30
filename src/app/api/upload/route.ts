@@ -1,6 +1,7 @@
 import { getVerifiedUser } from "@/lib/session-check";
 import crypto from "crypto";
 import { rateLimit } from "@/lib/rate-limit";
+import { checkServerStorage } from "@/lib/storage";
 import { parseExpiry, MAX_DOWNLOAD_COUNT, MAX_EXPIRE_HOURS } from "@/lib/expiry";
 import {
   MAX_BUNDLE_FILE_COUNT, MAX_SINGLE_FILE_SIZE,
@@ -76,6 +77,12 @@ export async function POST(request: NextRequest) {
   const pending = await pendingBytesForUser(userId);
   if (user.usedBytes! + pending + totalSize > user.quotaBytes!) {
     return NextResponse.json({ error: "Storage quota exceeded" }, { status: 400 });
+  }
+
+  // 🔒 Server-wide limit: keep the disk from filling up
+  const storageError = await checkServerStorage(totalSize);
+  if (storageError) {
+    return NextResponse.json({ error: storageError }, { status: 507 });
   }
 
   const id = crypto.randomUUID();

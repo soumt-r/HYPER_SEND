@@ -13,6 +13,8 @@ export const users = pgTable("user", {
   usedBytes: bigint("usedBytes", { mode: "number" }).default(0),
   // Session tokens from logins before this time are rejected (see lib/session-check.ts)
   sessionsValidAfter: timestamp("sessionsValidAfter", { mode: "date" }),
+  // Set by an admin: blocks sign-in and every signed-in action
+  bannedAt: timestamp("bannedAt", { mode: "date" }),
 })
 
 export const accounts = pgTable(

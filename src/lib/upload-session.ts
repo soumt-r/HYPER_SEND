@@ -75,6 +75,24 @@ export async function pendingBytesForUser(userId: string) {
   return total;
 }
 
+/** Bytes declared and already received across all uploads in progress. */
+export async function pendingUploadBytes() {
+  let declared = 0;
+  let received = 0;
+  const names = await readdir(TMP_DIR).catch(() => [] as string[]);
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const id = name.slice(0, -5);
+    const session = await readSession(id);
+    if (!session) continue;
+    for (let i = 0; i < session.files.length; i++) {
+      declared += session.files[i].size;
+      received += await fileSizeOrZero(partPath(id, i));
+    }
+  }
+  return { declared, received };
+}
+
 /** Delete temp files of sessions that stopped receiving data. */
 export async function cleanupStaleSessions() {
   const names = await readdir(TMP_DIR).catch(() => [] as string[]);

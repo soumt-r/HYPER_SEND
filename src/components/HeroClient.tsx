@@ -8,7 +8,7 @@ import { useState, useTransition, useRef, useEffect } from "react";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import { loginWithGoogle, logout } from "@/app/actions/auth";
-import { deleteFileAction } from "@/app/actions/manage";
+import { deleteAccountAction, deleteFileAction } from "@/app/actions/manage";
 import { createFileKey, decryptBlob, encryptRange, encryptedRangeSize } from "@/lib/e2ee";
 import { MAX_DOWNLOAD_COUNT, MAX_EXPIRE_HOURS } from "@/lib/expiry";
 import dynamic from "next/dynamic";
@@ -167,7 +167,7 @@ function sendChunk(url: string, chunk: Blob, onProgress: (loaded: number) => voi
   });
 }
 
-export default function HeroClient({ session, initialFiles = [], isAdmin = false, usage = { usedBytes: 0, quotaBytes: 0 } }: { session: any, initialFiles?: any[], isAdmin?: boolean, usage?: { usedBytes: number; quotaBytes: number } }) {
+export default function HeroClient({ session, initialFiles = [], isAdmin = false, usage = { usedBytes: 0, quotaBytes: 0 }, contactEmail = null }: { session: any, initialFiles?: any[], isAdmin?: boolean, usage?: { usedBytes: number; quotaBytes: number }, contactEmail?: string | null }) {
   const [activeModal, setActiveModal] = useState<"NONE" | "DOWNLOAD" | "UPLOAD" | "MANAGE">("NONE");
   const { theme, setTheme } = useTheme();
   const router = useRouter();
@@ -428,6 +428,11 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       setActiveDownloadId(null);
       setDownloadProgress(null);
     }
+  };
+
+  const handleDeleteAccount = () => {
+    if (!confirm("계정을 삭제할까요? 올린 파일이 모두 삭제되고 되돌릴 수 없어요.")) return;
+    startTransition(async () => { await deleteAccountAction(); });
   };
 
   const handleDelete = async (fileId: string) => {
@@ -716,6 +721,15 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                           })}
                         </div>
                       )}
+
+                      {contactEmail && (
+                        <a
+                          href={`mailto:${contactEmail}?subject=${encodeURIComponent(`[HYPER_SEND 신고] ${downloadCode}`)}&body=${encodeURIComponent(`신고할 다운로드 코드: ${downloadCode}\n신고 사유: `)}`}
+                          className="self-center font-mono text-[9px] text-[#BBBBBB] dark:text-[#555555] hover:text-red-500 dark:hover:text-red-400 tracking-widest uppercase transition-colors"
+                        >
+                          [ REPORT_THIS_BUNDLE ]
+                        </a>
+                      )}
                     </>
                   )}
                 </>
@@ -912,7 +926,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                                   {file.originalName}
                                 </span>
                                 <span className="font-mono text-[8px] text-[#999999] uppercase">
-                                  {file.maxDownloads ? `DL: ${file.currentDownloads}/${file.maxDownloads}` : `TIME: ${new Date(file.expiresAt).toLocaleTimeString()}`}
+                                  {file.maxDownloads ? `DL: ${file.currentDownloads}/${file.maxDownloads}` : `UNTIL: ${new Date(file.expiresAt).toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`}
                                 </span>
                               </div>
                             ))}
@@ -920,6 +934,15 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                         </div>
                       ))
                     )}
+                  </div>
+                  <div className="border-t-[0.5px] border-[#EEEEEE] dark:border-[#333333] pt-4 flex justify-end">
+                    <button
+                      onClick={handleDeleteAccount}
+                      disabled={isPending}
+                      className="font-mono text-[9px] text-[#BBBBBB] dark:text-[#555555] hover:text-red-500 dark:hover:text-red-400 tracking-widest uppercase transition-colors disabled:opacity-50"
+                    >
+                      [ DELETE_ACCOUNT ]
+                    </button>
                   </div>
                 </>
               )}

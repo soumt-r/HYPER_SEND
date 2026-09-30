@@ -23,7 +23,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       },
     }),
   ],
+  // JWT sessions: auth() verifies a signed cookie instead of querying the DB on
+  // every request (each upload chunk calls auth()). The adapter still stores users.
+  session: { strategy: "jwt" },
   callbacks: {
+    async session({ session, token }) {
+      if (token.sub) session.user.id = token.sub;
+      return session;
+    },
     async signIn({ account, profile }) {
       if (account?.provider === "google") {
         return profile?.email?.endsWith("@hanyang.ac.kr") ?? false

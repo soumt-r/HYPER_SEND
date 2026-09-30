@@ -1,30 +1,30 @@
 import { auth } from "@/auth";
 import HeroClient from "@/components/HeroClient";
 import { db } from "@/db";
-import { files } from "@/db/schema";
+import { files, users } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 
 export default async function Home() {
   const session = await auth();
   
   let userFiles: any[] = [];
-  let isAdmin = false;
-  let adminData = null;
+  let usage = { usedBytes: 0, quotaBytes: 0 };
+  const isAdmin = !!session?.user?.email && session.user.email === process.env.ADMIN_EMAIL;
 
   if (session?.user?.id) {
-    userFiles = await db.query.files.findMany({
-      where: eq(files.uploaderId, session.user.id),
-      orderBy: [desc(files.createdAt)]
-    });
-
-    if (session.user.email === process.env.ADMIN_EMAIL) {
-      isAdmin = true;
-      const allFiles = await db.query.files.findMany({
+    // Quota usage changes with every upload, so it's read here rather than kept in the session token
+    const [filesResult, user] = await Promise.all([
+      db.query.files.findMany({
+        where: eq(files.uploaderId, session.user.id),
         orderBy: [desc(files.createdAt)]
-      });
-      const allUsers = await db.query.users.findMany();
-      adminData = { allFiles, allUsers };
-    }
+      }),
+      db.query.users.findFirst({
+        where: eq(users.id, session.user.id),
+        columns: { usedBytes: true, quotaBytes: true },
+      }),
+    ]);
+    userFiles = filesResult;
+    if (user) usage = { usedBytes: user.usedBytes ?? 0, quotaBytes: user.quotaBytes ?? 0 };
   }
   
   return (
@@ -32,7 +32,7 @@ export default async function Home() {
       {/* Background Grid */}
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#f0f0f0_1px,transparent_1px),linear-gradient(to_bottom,#f0f0f0_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,#222_1px,transparent_1px),linear-gradient(to_bottom,#222_1px,transparent_1px)] bg-[size:32px_32px] opacity-60 z-0 pointer-events-none"></div>
       
-      <HeroClient session={session} initialFiles={userFiles} isAdmin={isAdmin} adminData={adminData} />
+      <HeroClient session={session} initialFiles={userFiles} isAdmin={isAdmin} usage={usage} />
       
       {/* Footer */}
       <footer className="w-full p-8 md:px-12 z-10 flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mt-auto">

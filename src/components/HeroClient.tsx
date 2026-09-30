@@ -167,8 +167,8 @@ function sendChunk(url: string, chunk: Blob, onProgress: (loaded: number) => voi
   });
 }
 
-export default function HeroClient({ session, initialFiles = [], isAdmin = false, adminData = null }: { session: any, initialFiles?: any[], isAdmin?: boolean, adminData?: any }) {
-  const [activeModal, setActiveModal] = useState<"NONE" | "DOWNLOAD" | "UPLOAD" | "MANAGE" | "ADMIN">("NONE");
+export default function HeroClient({ session, initialFiles = [], isAdmin = false, usage = { usedBytes: 0, quotaBytes: 0 } }: { session: any, initialFiles?: any[], isAdmin?: boolean, usage?: { usedBytes: number; quotaBytes: number } }) {
+  const [activeModal, setActiveModal] = useState<"NONE" | "DOWNLOAD" | "UPLOAD" | "MANAGE">("NONE");
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
@@ -233,7 +233,6 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   };
 
   const myBundles = groupFilesByCode(initialFiles);
-  const adminBundles = isAdmin && adminData ? groupFilesByCode(adminData.allFiles) : {};
 
   const addFiles = (picked: File[]) => {
     if (picked.length === 0) return;
@@ -448,9 +447,9 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   };
 
   const formatBytes = (bytes = 0) => (bytes / (1024 * 1024 * 1024)).toFixed(2);
-  const usedGB = formatBytes(session?.user?.usedBytes);
-  const quotaGB = formatBytes(session?.user?.quotaBytes);
-  const usagePercent = session?.user?.quotaBytes ? Math.min(100, (session.user.usedBytes / session.user.quotaBytes) * 100) : 0;
+  const usedGB = formatBytes(usage.usedBytes);
+  const quotaGB = formatBytes(usage.quotaBytes);
+  const usagePercent = usage.quotaBytes ? Math.min(100, (usage.usedBytes / usage.quotaBytes) * 100) : 0;
   const isAnyFileEncryptedInModal = foundFiles.some(f => f.isEncrypted);
 
   return (
@@ -556,7 +555,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
             transition={{ duration: 1.2, ease: "easeOut" }}
             className="absolute inset-0 z-10"
           >
-            <Image src="/illustration.png" alt="Mascot Illustration" fill className="object-contain object-bottom opacity-90 mix-blend-multiply dark:mix-blend-normal drop-shadow-sm" priority />
+            <Image src="/illustration.webp" alt="Mascot Illustration" fill unoptimized className="object-contain object-bottom opacity-90 mix-blend-multiply dark:mix-blend-normal drop-shadow-sm" priority />
           </m.div>
           <div className="absolute inset-0 z-20 opacity-80" style={{ clipPath: 'polygon(0 52%, 100% 52%, 100% 100%, 0 100%)' }}>
             <OrbitSVG />

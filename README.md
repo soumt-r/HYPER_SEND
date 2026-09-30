@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="public/illustration.png" alt="HYPER_SEND" width="260" />
+<img src="public/illustration.webp" alt="HYPER_SEND" width="260" />
 
 # <img src="src/app/icon.svg" alt="" width="34" /> HYPER_SEND
 

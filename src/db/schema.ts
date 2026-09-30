@@ -11,6 +11,8 @@ export const users = pgTable("user", {
   image: text("image"),
   quotaBytes: bigint("quotaBytes", { mode: "number" }).default(5368709120), // 5GB default
   usedBytes: bigint("usedBytes", { mode: "number" }).default(0),
+  // Session tokens from logins before this time are rejected (see lib/session-check.ts)
+  sessionsValidAfter: timestamp("sessionsValidAfter", { mode: "date" }),
 })
 
 export const accounts = pgTable(

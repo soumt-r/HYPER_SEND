@@ -1,7 +1,4 @@
-import { auth } from "@/auth";
-import { db } from "@/db";
-import { users } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { getVerifiedUser } from "@/lib/session-check";
 import crypto from "crypto";
 import { rateLimit } from "@/lib/rate-limit";
 import { parseExpiry, MAX_DOWNLOAD_COUNT, MAX_EXPIRE_HOURS } from "@/lib/expiry";
@@ -30,11 +27,12 @@ function isMimeAllowed(mimeType: string): boolean {
 // Start a chunked upload session. The client then PUTs each file's chunks to
 // /api/upload/[id]/[index] and finishes with POST /api/upload/[id]/complete.
 export async function POST(request: NextRequest) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const verified = await getVerifiedUser();
+  if (!verified) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const userId = session.user.id;
+  const { user } = verified;
+  const userId = user.id;
 
   // Rate limit
   const { allowed } = await rateLimit(`upload:${userId}`, 10, 60);
@@ -74,9 +72,6 @@ export async function POST(request: NextRequest) {
   }
 
   // Check quota, counting uploads this user has started but not finished
-  const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
-  if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
-
   const totalSize = uploadFiles.reduce((acc, f) => acc + f.size, 0);
   const pending = await pendingBytesForUser(userId);
   if (user.usedBytes! + pending + totalSize > user.quotaBytes!) {

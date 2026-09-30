@@ -4,6 +4,13 @@ import { DrizzleAdapter } from "@auth/drizzle-adapter"
 import { db } from "./db"
 import { accounts, sessions, users, verificationTokens } from "./db/schema"
 
+declare module "next-auth" {
+  interface Session {
+    /** Unix seconds of the sign-in this token descends from (kept across refreshes) */
+    loginAt?: number
+  }
+}
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
   adapter: DrizzleAdapter(db, {
     usersTable: users,
@@ -23,12 +30,20 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       },
     }),
   ],
-  // JWT sessions: auth() verifies a signed cookie instead of querying the DB on
-  // every request (each upload chunk calls auth()). The adapter still stores users.
-  session: { strategy: "jwt" },
+  // JWT sessions: auth() decrypts the cookie instead of querying the DB on every
+  // request (each upload chunk calls auth()). The adapter still stores users.
+  // Tokens last 7 days and are renewed daily while in use; revocation is handled
+  // by lib/session-check.ts.
+  session: { strategy: "jwt", maxAge: 7 * 24 * 60 * 60 },
   callbacks: {
+    async jwt({ token, user }) {
+      // `user` is only present on sign-in; the login time then stays fixed on refreshes
+      if (user) token.loginAt = Math.floor(Date.now() / 1000);
+      return token;
+    },
     async session({ session, token }) {
       if (token.sub) session.user.id = token.sub;
+      session.loginAt = token.loginAt as number | undefined;
       return session;
     },
     async signIn({ account, profile }) {

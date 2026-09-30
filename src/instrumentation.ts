@@ -25,6 +25,11 @@ export async function register() {
       await runMigrations();
     }
 
+    // Anyone with AUTH_SECRET can mint a session for any user, so it must be long and random
+    if ((process.env.AUTH_SECRET ?? "").length < 32) {
+      console.warn("[Security] AUTH_SECRET is shorter than 32 characters. Generate one with `npx auth secret`.");
+    }
+
     console.log("Starting Background Cleanup Worker...");
     
     // Run every 1 minute

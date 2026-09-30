@@ -53,6 +53,17 @@ DB 스키마는 컨테이너가 시작될 때 자동으로 생성·마이그레�
 
 앱 포트는 `127.0.0.1:3000`에만 열리며, Cloudflare Tunnel(`cloudflared`)이 호스트에서 `http://localhost:3000`으로 연결하는 구성을 전제로 합니다. 요청 제한은 `CF-Connecting-IP` 기준으로 동작하며, 잘못된 다운로드 코드를 10번 입력하면 15분간 조회가 막힙니다.
 
+### 로그인 세션 보안
+
+로그인은 암호화된 JWT 쿠키(7일, 사용 중이면 매일 연장)로 유지됩니다. `AUTH_SECRET`이 있으면 누구의 로그인 토큰이든 만들 수 있으므로 `npx auth secret`으로 만든 값을 `.env`에만 두세요.
+
+- 로그아웃하면 그 계정의 모든 기기에서 로그아웃되고, 복사된 토큰도 무효가 됩니다.
+- 특정 사용자를 강제로 로그아웃시키려면:
+  ```bash
+  docker compose exec -T db psql -U hyper_user hyper_send -c "update \"user\" set \"sessionsValidAfter\" = now() where email = '대상@hanyang.ac.kr'"
+  ```
+- `AUTH_SECRET`이 유출됐다면 새 값으로 바꾸고 `docker compose up -d`로 재시작하세요. 모든 사용자가 즉시 로그아웃됩니다.
+
 ### 백업
 
 백업 대상은 DB와 `./uploads` 두 가지입니다.

@@ -1,4 +1,4 @@
-import { auth } from "@/auth";
+import { getVerifiedUser } from "@/lib/session-check";
 import { db } from "@/db";
 import { users, files } from "@/db/schema";
 import { redirect } from "next/navigation";
@@ -7,9 +7,9 @@ import Link from "next/link";
 import { ArrowLeft, HardDrive, Users, FileText, Database, ShieldCheck } from "lucide-react";
 
 export default async function AdminPage() {
-  const session = await auth();
+  const verified = await getVerifiedUser();
 
-  if (!session?.user || session.user.email !== process.env.ADMIN_EMAIL) {
+  if (!verified || !verified.user.email || verified.user.email !== process.env.ADMIN_EMAIL) {
     redirect("/");
   }
 
@@ -58,7 +58,7 @@ export default async function AdminPage() {
             </div>
           </div>
           <div className="font-mono text-xs text-[#999999] bg-[#FAFAFA] px-4 py-2 rounded-lg border-[0.5px] border-[#EEEEEE]">
-            {session.user.email}
+            {verified.user.email}
           </div>
         </header>
 

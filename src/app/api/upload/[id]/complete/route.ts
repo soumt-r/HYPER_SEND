@@ -1,4 +1,4 @@
-import { auth } from "@/auth";
+import { getVerifiedUser } from "@/lib/session-check";
 import { db } from "@/db";
 import { files, users } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
@@ -15,11 +15,11 @@ export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const authSession = await auth();
-  if (!authSession?.user?.id) {
+  const verified = await getVerifiedUser();
+  if (!verified) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const userId = authSession.user.id;
+  const userId = verified.user.id;
 
   const { id } = await params;
   const session = await readSession(id);

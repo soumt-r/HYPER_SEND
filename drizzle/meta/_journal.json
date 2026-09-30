@@ -15,6 +15,13 @@
       "when": 1790729170568,
       "tag": "0001_add_file_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790758125622,
+      "tag": "0002_add_sessions_valid_after",
+      "breakpoints": true
     }
   ]
 }

@@ -1,30 +1,25 @@
-import { auth } from "@/auth";
+import { getVerifiedUser } from "@/lib/session-check";
 import HeroClient from "@/components/HeroClient";
 import { db } from "@/db";
-import { files, users } from "@/db/schema";
+import { files } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 
 export default async function Home() {
-  const session = await auth();
+  // A revoked token renders the page as signed out
+  const verified = await getVerifiedUser();
+  const session = verified?.session ?? null;
   
   let userFiles: any[] = [];
   let usage = { usedBytes: 0, quotaBytes: 0 };
-  const isAdmin = !!session?.user?.email && session.user.email === process.env.ADMIN_EMAIL;
+  const isAdmin = !!verified?.user.email && verified.user.email === process.env.ADMIN_EMAIL;
 
-  if (session?.user?.id) {
-    // Quota usage changes with every upload, so it's read here rather than kept in the session token
-    const [filesResult, user] = await Promise.all([
-      db.query.files.findMany({
-        where: eq(files.uploaderId, session.user.id),
-        orderBy: [desc(files.createdAt)]
-      }),
-      db.query.users.findFirst({
-        where: eq(users.id, session.user.id),
-        columns: { usedBytes: true, quotaBytes: true },
-      }),
-    ]);
-    userFiles = filesResult;
-    if (user) usage = { usedBytes: user.usedBytes ?? 0, quotaBytes: user.quotaBytes ?? 0 };
+  if (verified) {
+    userFiles = await db.query.files.findMany({
+      where: eq(files.uploaderId, verified.user.id),
+      orderBy: [desc(files.createdAt)]
+    });
+    // Quota usage changes with every upload, so it comes from the DB rather than the session token
+    usage = { usedBytes: verified.user.usedBytes ?? 0, quotaBytes: verified.user.quotaBytes ?? 0 };
   }
   
   return (

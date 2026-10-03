@@ -1,8 +1,9 @@
 import { db } from "@/db";
-import { files, users } from "@/db/schema";
-import { lt, sql, eq } from "drizzle-orm";
+import { files } from "@/db/schema";
+import { lt } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { cleanupStaleSessions } from "@/lib/upload-session";
+import { deleteFileRecords } from "@/lib/file-ops";
 
 // Apply pending SQL migrations from ./drizzle, retrying while the DB is still starting up
 async function runMigrations() {
@@ -25,9 +26,19 @@ export async function register() {
       await runMigrations();
     }
 
-    // Anyone with AUTH_SECRET can mint a session for any user, so it must be long and random
+    // Anyone with AUTH_SECRET can mint a session for any user, so it must be long and random.
+    // In production, refuse to start with it or the example DB password.
+    const problems = [];
     if ((process.env.AUTH_SECRET ?? "").length < 32) {
-      console.warn("[Security] AUTH_SECRET is shorter than 32 characters. Generate one with `npx auth secret`.");
+      problems.push("AUTH_SECRET is shorter than 32 characters. Generate one with `npx auth secret`.");
+    }
+    if (process.env.POSTGRES_PASSWORD === "change-me") {
+      problems.push("POSTGRES_PASSWORD is still the example value from .env.example.");
+    }
+    for (const problem of problems) console.error(`[Security] ${problem}`);
+    if (problems.length > 0 && process.env.NODE_ENV === "production") {
+      console.error("[Security] Refusing to start with an insecure configuration.");
+      process.exit(1);
     }
 
     console.log("Starting Background Cleanup Worker...");
@@ -45,25 +56,8 @@ export async function register() {
           where: lt(files.expiresAt, now)
         });
         
-        for (const file of expiredFiles) {
-          console.log(`[Worker] Deleting expired file: ${file.id}`);
-          
-          // Delete from disk
-          try {
-            const fs = await import("fs");
-            fs.unlinkSync(file.localPath);
-          } catch (e: any) {
-            console.error(`[Worker] Could not delete physical file ${file.localPath}:`, e.message);
-          }
-          
-          // Delete from DB
-          await db.delete(files).where(eq(files.id, file.id));
-          
-          // Update user quota
-          await db.update(users)
-            .set({ usedBytes: sql`${users.usedBytes} - ${file.sizeBytes}` })
-            .where(eq(users.id, file.uploaderId));
-        }
+        for (const file of expiredFiles) console.log(`[Worker] Deleting expired file: ${file.id}`);
+        await deleteFileRecords(expiredFiles);
         
       } catch (err) {
         console.error("[Worker] Cleanup error:", err);

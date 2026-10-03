@@ -18,7 +18,12 @@ export default async function Home() {
   if (verified) {
     userFiles = await db.query.files.findMany({
       where: eq(files.uploaderId, verified.user.id),
-      orderBy: [desc(files.createdAt)]
+      orderBy: [desc(files.createdAt)],
+      // Only what the file list shows; localPath and passwordHash stay on the server
+      columns: {
+        id: true, originalName: true, sizeBytes: true, downloadCode: true, isEncrypted: true,
+        expiresAt: true, maxDownloads: true, currentDownloads: true, createdAt: true,
+      },
     });
     // Quota usage changes with every upload, so it comes from the DB rather than the session token
     usage = { usedBytes: verified.user.usedBytes ?? 0, quotaBytes: verified.user.quotaBytes ?? 0 };

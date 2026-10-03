@@ -6,6 +6,7 @@ import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { signOut } from "@/auth";
 import { deleteFileRecords } from "@/lib/file-ops";
+import { removeUserSessions } from "@/lib/upload-session";
 
 export async function deleteFileAction(fileId: string) {
   const verified = await getVerifiedUser();
@@ -32,6 +33,7 @@ export async function deleteAccountAction() {
 
   const records = await db.query.files.findMany({ where: eq(files.uploaderId, userId) });
   await deleteFileRecords(records);
+  await removeUserSessions(userId);
   await db.delete(users).where(eq(users.id, userId));
 
   await signOut({ redirectTo: "/" });

@@ -60,8 +60,19 @@ export async function POST(
     .returning({ id: users.id });
   if (!reserved) return fail("Storage quota exceeded", 400);
 
-  // Generate 8-char download code for the bundle
-  const code = crypto.randomBytes(4).toString("hex").toUpperCase();
+  // Generate an 8-char download code for the bundle. Codes are only 32 bits, so
+  // check it isn't in use: a collision would show this bundle together with
+  // someone else's files under one code.
+  let code = "";
+  for (let attempt = 0; ; attempt++) {
+    code = crypto.randomBytes(4).toString("hex").toUpperCase();
+    const taken = await db.query.files.findFirst({ where: eq(files.downloadCode, code), columns: { id: true } });
+    if (!taken) break;
+    if (attempt >= 4) {
+      await db.update(users).set({ usedBytes: sql`GREATEST(0, ${users.usedBytes} - ${totalSize})` }).where(eq(users.id, userId));
+      return fail("다운로드 코드를 만들지 못했어요. 다시 시도해주세요.", 503);
+    }
+  }
   const insertData = [];
   for (let i = 0; i < session.files.length; i++) {
     const file = session.files[i];
@@ -71,13 +82,17 @@ export async function POST(
     await rename(partPath(id, i), localPath);
     insertData.push({
       uploaderId: userId,
-      originalName: file.name,
-      mimeType: file.type,
+      // Encrypted bundles: the real name and type are only in encryptedMeta
+      originalName: session.auth ? `encrypted-${i + 1}` : file.name,
+      mimeType: session.auth ? "application/octet-stream" : file.type,
       sizeBytes: file.size,
       localPath,
       downloadCode: code,
       ...expiry,
       isEncrypted: session.isEncrypted,
+      passwordHash: session.auth?.hash ?? null,
+      authSalt: session.auth?.salt ?? null,
+      encryptedMeta: file.meta ?? null,
     });
   }
 

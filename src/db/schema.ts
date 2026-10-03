@@ -71,7 +71,11 @@ export const files = pgTable("file", {
   sizeBytes: bigint("sizeBytes", { mode: "number" }).notNull(),
   localPath: text("localPath").notNull(),
   downloadCode: text("downloadCode").notNull(),
+  // Encrypted bundles: SHA-256 of the auth token derived from the password
+  // (lib/e2ee.ts), the salt to derive it, and the file's encrypted real name/type
   passwordHash: text("passwordHash"),
+  authSalt: text("authSalt"),
+  encryptedMeta: text("encryptedMeta"),
   
   expiresAt: timestamp("expiresAt", { mode: "date" }), 
   maxDownloads: integer("maxDownloads"),

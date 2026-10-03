@@ -6,6 +6,7 @@ import { Readable } from "stream";
 import { NextRequest, NextResponse } from "next/server";
 import { resolve } from "path";
 import { getClientIp, rateLimit } from "@/lib/rate-limit";
+import { verifyBundleToken } from "@/lib/bundle-auth";
 
 // ASCII fallback plus RFC 5987 filename* so non-ASCII (e.g. Korean) names are saved correctly
 function contentDisposition(name: string) {
@@ -58,6 +59,14 @@ export async function GET(
     return NextResponse.json({ error: "File link has expired." }, { status: 410 });
   }
 
+  // 🔒 Encrypted bundles: only someone who knows the password can fetch the
+  // data or use up a download (the token is derived from it, see lib/e2ee.ts)
+  if (fileRecord.passwordHash) {
+    const token = request.headers.get("x-download-token");
+    const rejected = await verifyBundleToken(token, fileRecord.passwordHash, ip, fileRecord.downloadCode);
+    if (rejected) return NextResponse.json({ error: rejected.error }, { status: rejected.status });
+  }
+
   // Open the file before claiming a download, so a missing file doesn't use one up.
   // The open handle also keeps the data readable if the file is unlinked below.
   let handle;
@@ -86,7 +95,7 @@ export async function GET(
     if (claimed.currentDownloads! >= fileRecord.maxDownloads) {
       await db.delete(files).where(eq(files.id, fileRecord.id));
       await db.update(users)
-        .set({ usedBytes: sql`${users.usedBytes} - ${fileRecord.sizeBytes}` })
+        .set({ usedBytes: sql`GREATEST(0, ${users.usedBytes} - ${fileRecord.sizeBytes})` })
         .where(eq(users.id, fileRecord.uploaderId));
       await unlink(resolvedPath).catch(() => {});
     }
@@ -101,6 +110,9 @@ export async function GET(
       "Content-Type": fileRecord.mimeType || "application/octet-stream",
       "Content-Length": fileRecord.sizeBytes.toString(),
       "X-Content-Type-Options": "nosniff",
+      // The type is declared by the uploader (e.g. text/html, image/svg+xml); if a
+      // browser ever renders it instead of downloading, it gets no scripts or origin
+      "Content-Security-Policy": "sandbox; default-src 'none'",
       "Cache-Control": "no-store, max-age=0",
     },
   });

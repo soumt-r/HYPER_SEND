@@ -20,9 +20,13 @@ const ALLOWED_MIME_PREFIXES = [
   "application/octet-stream",
 ];
 
+// type/subtype only: the value is sent back as the Content-Type of downloads
+const MIME_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
+
 function isMimeAllowed(mimeType: string): boolean {
   if (!mimeType) return true;
-  return ALLOWED_MIME_PREFIXES.some(prefix => mimeType.startsWith(prefix));
+  if (!MIME_RE.test(mimeType)) return false;
+  return ALLOWED_MIME_PREFIXES.some(prefix => mimeType.toLowerCase().startsWith(prefix));
 }
 
 // Start a chunked upload session. The client then PUTs each file's chunks to

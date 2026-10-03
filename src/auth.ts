@@ -50,7 +50,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     async signIn({ account, profile }) {
       if (account?.provider !== "google") return true
       const email = profile?.email
-      if (!email?.endsWith("@hanyang.ac.kr")) return false
+      if (!email?.endsWith("@hanyang.ac.kr") || profile?.email_verified !== true) return false
 
       // Banned users can't sign back in
       const existing = await db.query.users.findFirst({

@@ -86,7 +86,7 @@ export async function GET(
     if (claimed.currentDownloads! >= fileRecord.maxDownloads) {
       await db.delete(files).where(eq(files.id, fileRecord.id));
       await db.update(users)
-        .set({ usedBytes: sql`${users.usedBytes} - ${fileRecord.sizeBytes}` })
+        .set({ usedBytes: sql`GREATEST(0, ${users.usedBytes} - ${fileRecord.sizeBytes})` })
         .where(eq(users.id, fileRecord.uploaderId));
       await unlink(resolvedPath).catch(() => {});
     }
@@ -101,6 +101,9 @@ export async function GET(
       "Content-Type": fileRecord.mimeType || "application/octet-stream",
       "Content-Length": fileRecord.sizeBytes.toString(),
       "X-Content-Type-Options": "nosniff",
+      // The type is declared by the uploader (e.g. text/html, image/svg+xml); if a
+      // browser ever renders it instead of downloading, it gets no scripts or origin
+      "Content-Security-Policy": "sandbox; default-src 'none'",
       "Cache-Control": "no-store, max-age=0",
     },
   });

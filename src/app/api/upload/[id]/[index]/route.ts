@@ -3,6 +3,11 @@ import { open, utimes } from "fs/promises";
 import { NextRequest, NextResponse } from "next/server";
 import { MAX_CHUNK_BYTES, fileSizeOrZero, metaPath, partPath, readSession } from "@/lib/upload-session";
 
+// Part files being written right now. Two requests for the same part could both
+// pass the offset check and append twice, writing more than the declared size.
+const globalWriting = globalThis as typeof globalThis & { __uploadWriting?: Set<string> };
+const writing = globalWriting.__uploadWriting ??= new Set();
+
 // Append one chunk to a file of an upload session.
 // `offset` must equal the bytes already received, so a retried or duplicated
 // chunk is rejected with 409 and the client resumes from `received`.
@@ -30,13 +35,25 @@ export async function PUT(
   }
 
   const path = partPath(id, index);
+  if (writing.has(path)) {
+    return NextResponse.json({ error: "Chunk already in progress", received: await fileSizeOrZero(path) }, { status: 409 });
+  }
+  writing.add(path);
+  try {
+    return await writeChunk(request, id, path, file.size);
+  } finally {
+    writing.delete(path);
+  }
+}
+
+async function writeChunk(request: NextRequest, id: string, path: string, fileSize: number) {
   const received = await fileSizeOrZero(path);
   const offset = Number(request.nextUrl.searchParams.get("offset"));
   if (offset !== received) {
     return NextResponse.json({ error: "Offset mismatch", received }, { status: 409 });
   }
   const length = Number(request.nextUrl.searchParams.get("length"));
-  if (!Number.isInteger(length) || length < 1 || length > MAX_CHUNK_BYTES || received + length > file.size) {
+  if (!Number.isInteger(length) || length < 1 || length > MAX_CHUNK_BYTES || received + length > fileSize) {
     return NextResponse.json({ error: "Invalid chunk length" }, { status: 413 });
   }
   if (!request.body) {

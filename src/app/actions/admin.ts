@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { getVerifiedUser } from "@/lib/session-check";
 import { isAdminEmail } from "@/lib/site";
 import { deleteFileRecords } from "@/lib/file-ops";
+import { removeUserSessions } from "@/lib/upload-session";
 
 async function requireAdmin() {
   const verified = await getVerifiedUser();
@@ -34,6 +35,8 @@ export async function adminSetBan(userId: string, banned: boolean) {
     await db.update(users).set({ bannedAt: now, sessionsValidAfter: now }).where(eq(users.id, userId));
     const records = await db.query.files.findMany({ where: eq(files.uploaderId, userId) });
     await deleteFileRecords(records);
+    // Chunk uploads skip the ban check, so also drop uploads still in progress
+    await removeUserSessions(userId);
   } else {
     await db.update(users).set({ bannedAt: null }).where(eq(users.id, userId));
   }

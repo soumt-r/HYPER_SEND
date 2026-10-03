@@ -82,13 +82,17 @@ export async function POST(
     await rename(partPath(id, i), localPath);
     insertData.push({
       uploaderId: userId,
-      originalName: file.name,
-      mimeType: file.type,
+      // Encrypted bundles: the real name and type are only in encryptedMeta
+      originalName: session.auth ? `encrypted-${i + 1}` : file.name,
+      mimeType: session.auth ? "application/octet-stream" : file.type,
       sizeBytes: file.size,
       localPath,
       downloadCode: code,
       ...expiry,
       isEncrypted: session.isEncrypted,
+      passwordHash: session.auth?.hash ?? null,
+      authSalt: session.auth?.salt ?? null,
+      encryptedMeta: file.meta ?? null,
     });
   }
 

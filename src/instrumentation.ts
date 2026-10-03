@@ -26,9 +26,19 @@ export async function register() {
       await runMigrations();
     }
 
-    // Anyone with AUTH_SECRET can mint a session for any user, so it must be long and random
+    // Anyone with AUTH_SECRET can mint a session for any user, so it must be long and random.
+    // In production, refuse to start with it or the example DB password.
+    const problems = [];
     if ((process.env.AUTH_SECRET ?? "").length < 32) {
-      console.warn("[Security] AUTH_SECRET is shorter than 32 characters. Generate one with `npx auth secret`.");
+      problems.push("AUTH_SECRET is shorter than 32 characters. Generate one with `npx auth secret`.");
+    }
+    if (process.env.POSTGRES_PASSWORD === "change-me") {
+      problems.push("POSTGRES_PASSWORD is still the example value from .env.example.");
+    }
+    for (const problem of problems) console.error(`[Security] ${problem}`);
+    if (problems.length > 0 && process.env.NODE_ENV === "production") {
+      console.error("[Security] Refusing to start with an insecure configuration.");
+      process.exit(1);
     }
 
     console.log("Starting Background Cleanup Worker...");

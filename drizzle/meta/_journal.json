@@ -29,6 +29,13 @@
       "when": 1790759160774,
       "tag": "0003_add_user_banned_at",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791006507721,
+      "tag": "0004_add_bundle_auth",
+      "breakpoints": true
     }
   ]
 }

@@ -9,7 +9,10 @@ import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import { loginWithGoogle, logout } from "@/app/actions/auth";
 import { deleteAccountAction, deleteFileAction } from "@/app/actions/manage";
-import { createFileKey, decryptBlob, encryptRange, encryptedRangeSize } from "@/lib/e2ee";
+import {
+  type BundleKeys, createBundleKeys, createFileKey, decryptFile, decryptLegacyBlob, decryptMeta,
+  encryptMeta, encryptRange, encryptedRangeSize, toBase64, unlockBundleKeys,
+} from "@/lib/e2ee";
 import { MAX_DOWNLOAD_COUNT, MAX_EXPIRE_HOURS } from "@/lib/expiry";
 import dynamic from "next/dynamic";
 
@@ -72,13 +75,13 @@ const UPLOAD_CHUNK_SIZE = 50 * 1024 * 1024;
 const PARALLEL_FILE_UPLOADS = 3;
 
 type UploadPiece = { start: number; length: number; data: () => Promise<Blob> };
-type UploadPlan = { name: string; type: string; size: number; pieces: UploadPiece[] };
+type UploadPlan = { name: string; type: string; size: number; meta?: string; pieces: UploadPiece[] };
 
 // Split a file into upload pieces. Encrypted pieces are produced right before
 // sending, so large files never have to be encrypted (or held) all at once.
-async function planUpload(file: File, password: string): Promise<UploadPlan> {
+async function planUpload(file: File, index: number, bundle: BundleKeys | null): Promise<UploadPlan> {
   const pieces: UploadPiece[] = [];
-  if (!password) {
+  if (!bundle) {
     for (let start = 0; start < file.size; start += UPLOAD_CHUNK_SIZE) {
       const end = Math.min(start + UPLOAD_CHUNK_SIZE, file.size);
       pieces.push({ start, length: end - start, data: async () => file.slice(start, end) });
@@ -86,7 +89,7 @@ async function planUpload(file: File, password: string): Promise<UploadPlan> {
     return { name: file.name, type: file.type, size: file.size, pieces };
   }
 
-  const fileKey = await createFileKey(password);
+  const fileKey = await createFileKey(bundle);
   let uploadOffset = 0;
   let plainStart = 0;
   do {
@@ -97,7 +100,9 @@ async function planUpload(file: File, password: string): Promise<UploadPlan> {
     uploadOffset += length;
     plainStart = end;
   } while (plainStart < file.size);
-  return { name: file.name, type: file.type || "application/octet-stream", size: uploadOffset, pieces };
+  // The server only sees a placeholder name; the real name and type travel encrypted
+  const meta = await encryptMeta(bundle, { name: file.name, type: file.type, size: file.size });
+  return { name: `encrypted-${index + 1}`, type: "application/octet-stream", size: uploadOffset, meta, pieces };
 }
 
 // Send a file's pieces in order, retrying and resuming from what the server already has
@@ -195,6 +200,10 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   const [activeDownloadId, setActiveDownloadId] = useState<string | null>(null);
   // Progress of the active (encrypted) download: percent received, then decrypting
   const [downloadProgress, setDownloadProgress] = useState<{ percent: number; decrypting: boolean } | null>(null);
+  // Encrypted bundles: salt from the server, and the keys once the password is verified
+  const [bundleAuthSalt, setBundleAuthSalt] = useState<string | null>(null);
+  const [isUnlocking, setIsUnlocking] = useState(false);
+  const bundleKeysRef = useRef<BundleKeys | null>(null);
 
   // Upload State
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -277,7 +286,8 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       const password = uploadPassword;
       setUploadState("UPLOADING");
       setUploadProgress(0);
-      const plans = await Promise.all(selectedFiles.map(f => planUpload(f, password)));
+      const bundle = password ? await createBundleKeys(password) : null;
+      const plans = await Promise.all(selectedFiles.map((f, i) => planUpload(f, i, bundle)));
 
       // 1. Start an upload session
       const init = await fetch("/api/upload", {
@@ -286,8 +296,9 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
         body: JSON.stringify({
           expireType,
           expireValue,
-          isEncrypted: password.length > 0,
-          files: plans.map(p => ({ name: p.name, type: p.type, size: p.size })),
+          isEncrypted: bundle !== null,
+          auth: bundle ? { salt: toBase64(bundle.salt), token: toBase64(bundle.authToken) } : undefined,
+          files: plans.map(p => ({ name: p.name, type: p.type, size: p.size, meta: p.meta })),
         }),
         signal,
       }).then(readJson);
@@ -351,10 +362,49 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Files not found");
       setFoundFiles(data.files);
+      setBundleAuthSalt(data.authSalt ?? null);
+      bundleKeysRef.current = null;
       setIsBundleUnlocked(false);
       setDownloadPassword("");
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  // Check the password with the server, then decrypt the real file names
+  const handleUnlock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    // Bundles from before the auth token: the password is only checked when decrypting
+    if (!bundleAuthSalt) {
+      setIsBundleUnlocked(true);
+      return;
+    }
+    setIsUnlocking(true);
+    try {
+      const keys = await unlockBundleKeys(downloadPassword, bundleAuthSalt);
+      const res = await fetch(`/api/download-info/${downloadCode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: toBase64(keys.authToken) }),
+      });
+      const data = await readJson(res);
+      if (!res.ok) {
+        setDownloadError(data.error || "잠금을 풀지 못했어요.");
+        setDownloadPassword("");
+        return;
+      }
+      const unlocked = await Promise.all(data.files.map(async (f: { id: string; sizeBytes: number; isEncrypted: boolean; encryptedMeta: string }) => {
+        const meta = await decryptMeta(keys, f.encryptedMeta);
+        return { ...f, originalName: meta.name, mimeType: meta.type, plainSize: meta.size };
+      }));
+      bundleKeysRef.current = keys;
+      setFoundFiles(unlocked);
+      setDownloadPassword("");
+      setIsBundleUnlocked(true);
+    } catch {
+      setDownloadError("파일 정보를 복호화하지 못했어요.");
+    } finally {
+      setIsUnlocking(false);
     }
   };
 
@@ -371,8 +421,9 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       return;
     }
 
+    const keys = bundleKeysRef.current;
     // Check before fetching, so a missing password doesn't use up a download
-    if (!downloadPassword) {
+    if (!keys && !downloadPassword) {
       alert("Password is required to decrypt this file.");
       return;
     }
@@ -380,7 +431,9 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
     setActiveDownloadId(file.id);
     setDownloadProgress({ percent: 0, decrypting: false });
     try {
-      const res = await fetch(`/api/download/${file.id}`);
+      const res = await fetch(`/api/download/${file.id}`, {
+        headers: keys ? { "X-Download-Token": toBase64(keys.authToken) } : {},
+      });
       if (!res.ok || !res.body) {
         const err = await readJson(res);
         throw new Error(err.error || "Download failed");
@@ -401,11 +454,22 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
 
       setDownloadProgress({ percent: 100, decrypting: true });
       let finalBlob: Blob;
-      try {
-        finalBlob = await decryptBlob(new Blob(parts), downloadPassword);
-        finalBlob = new Blob([finalBlob], { type: res.headers.get("Content-Type") || "application/octet-stream" });
-      } catch {
-        throw new Error("Wrong Password or Decryption failed");
+      if (keys) {
+        // The password was already verified, so a failure here means the data was altered
+        try {
+          finalBlob = await decryptFile(new Blob(parts), keys);
+        } catch {
+          throw new Error("파일이 손상되었거나 변조되어 복호화할 수 없어요.");
+        }
+        if (finalBlob.size !== file.plainSize) throw new Error("파일이 손상되었거나 변조되어 복호화할 수 없어요.");
+        finalBlob = new Blob([finalBlob], { type: file.mimeType || "application/octet-stream" });
+      } else {
+        try {
+          finalBlob = await decryptLegacyBlob(new Blob(parts), downloadPassword);
+          finalBlob = new Blob([finalBlob], { type: res.headers.get("Content-Type") || "application/octet-stream" });
+        } catch {
+          throw new Error("Wrong Password or Decryption failed");
+        }
       }
       const url = window.URL.createObjectURL(finalBlob);
       const a = document.createElement("a");
@@ -445,6 +509,8 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
     setActiveModal("NONE");
     setDownloadCode("");
     setFoundFiles([]);
+    setBundleAuthSalt(null);
+    bundleKeysRef.current = null;
     setSelectedFiles([]);
     setUploadState("IDLE");
     setUploadPassword("");
@@ -655,7 +721,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
 
                       {isAnyFileEncryptedInModal && !isBundleUnlocked ? (
                         <form
-                          onSubmit={(e) => { e.preventDefault(); setIsBundleUnlocked(true); }}
+                          onSubmit={handleUnlock}
                           className="relative bg-[#FAFAFA] dark:bg-[#111111] border-[0.5px] border-[#EEEEEE] dark:border-[#333333] p-5 flex flex-col gap-4"
                         >
                           <div className="font-mono text-[10px] text-[#111111] dark:text-white uppercase tracking-widest flex items-center gap-2">
@@ -672,8 +738,8 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                           {downloadError && (
                             <span className="font-mono text-[9px] text-red-500 tracking-widest">{downloadError}</span>
                           )}
-                          <button type="submit" disabled={!downloadPassword} className="w-full py-3 bg-[#111111] dark:bg-white text-white dark:text-[#111111] font-mono text-[9px] tracking-widest uppercase hover:bg-transparent hover:text-[#111111] dark:hover:bg-transparent dark:hover:text-white border-[0.5px] border-[#111111] dark:border-white transition-colors disabled:opacity-50">
-                            [ UNLOCK_FILES ]
+                          <button type="submit" disabled={!downloadPassword || isUnlocking} className="w-full py-3 bg-[#111111] dark:bg-white text-white dark:text-[#111111] font-mono text-[9px] tracking-widest uppercase hover:bg-transparent hover:text-[#111111] dark:hover:bg-transparent dark:hover:text-white border-[0.5px] border-[#111111] dark:border-white transition-colors disabled:opacity-50">
+                            {isUnlocking ? "[ UNLOCKING... ]" : "[ UNLOCK_FILES ]"}
                           </button>
                         </form>
                       ) : (
@@ -687,7 +753,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                                     {file.originalName}
                                   </span>
                                   <span className="font-mono text-[9px] text-[#999999] tracking-widest uppercase">
-                                    {(file.sizeBytes / 1024 / 1024).toFixed(2)} MB
+                                    {((file.plainSize ?? file.sizeBytes) / 1024 / 1024).toFixed(2)} MB
                                     {activeDownloadId === file.id && downloadProgress && (
                                       <span className="text-[#2549BB] dark:text-[#6F8FFF]">
                                         {downloadProgress.decrypting ? " · DECRYPTING" : ` · ${downloadProgress.percent}%`}

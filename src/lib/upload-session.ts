@@ -9,6 +9,10 @@ export const CHUNK_SIZE = 50 * 1024 * 1024; // what the client sends
 export const MAX_CHUNK_BYTES = 64 * 1024 * 1024; // what the server accepts per request
 export const MAX_SINGLE_FILE_SIZE = 2 * 1024 * 1024 * 1024;
 export const MAX_BUNDLE_FILE_COUNT = 20;
+// Per user: shared files at once (empty files take no quota but still a DB row),
+// and uploads in progress
+export const MAX_ACTIVE_FILES_PER_USER = 200;
+export const MAX_OPEN_UPLOADS_PER_USER = 5;
 export const STALE_SESSION_MS = 6 * 60 * 60 * 1000;
 
 export const UPLOADS_DIR = join(process.cwd(), "uploads");
@@ -20,7 +24,10 @@ export type UploadSession = {
   expireType: string;
   expireValue: number;
   isEncrypted: boolean;
-  files: { name: string; type: string; size: number }[];
+  // Encrypted bundles: salt and hash of the password-derived auth token (lib/bundle-auth.ts)
+  auth?: { salt: string; hash: string };
+  // `meta` is the encrypted real name/type of a file in an encrypted bundle
+  files: { name: string; type: string; size: number; meta?: string }[];
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -61,18 +68,34 @@ export async function removeSessionFiles(id: string, fileCount: number) {
   ]);
 }
 
-/** Bytes a user has declared in upload sessions that haven't completed yet. */
-export async function pendingBytesForUser(userId: string) {
-  let total = 0;
+/** IDs and sessions of a user's uploads that haven't completed yet. */
+async function sessionsOfUser(userId: string) {
+  const found: { id: string; session: UploadSession }[] = [];
   const names = await readdir(TMP_DIR).catch(() => [] as string[]);
   for (const name of names) {
     if (!name.endsWith(".json")) continue;
-    const session = await readSession(name.slice(0, -5));
-    if (session?.userId === userId) {
-      total += session.files.reduce((acc, f) => acc + f.size, 0);
-    }
+    const id = name.slice(0, -5);
+    const session = await readSession(id);
+    if (session?.userId === userId) found.push({ id, session });
   }
-  return total;
+  return found;
+}
+
+/** What a user has declared in upload sessions that haven't completed yet. */
+export async function pendingForUser(userId: string) {
+  const open = await sessionsOfUser(userId);
+  return {
+    uploads: open.length,
+    files: open.reduce((acc, { session }) => acc + session.files.length, 0),
+    bytes: open.reduce((acc, { session }) => acc + session.files.reduce((sum, f) => sum + f.size, 0), 0),
+  };
+}
+
+/** Cancel every upload in progress of a user (on ban or account deletion). */
+export async function removeUserSessions(userId: string) {
+  for (const { id, session } of await sessionsOfUser(userId)) {
+    await removeSessionFiles(id, session.files.length);
+  }
 }
 
 /** Bytes declared and already received across all uploads in progress. */

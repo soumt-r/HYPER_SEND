@@ -6,6 +6,7 @@ import { Readable } from "stream";
 import { NextRequest, NextResponse } from "next/server";
 import { resolve } from "path";
 import { getClientIp, rateLimit } from "@/lib/rate-limit";
+import { verifyBundleToken } from "@/lib/bundle-auth";
 
 // ASCII fallback plus RFC 5987 filename* so non-ASCII (e.g. Korean) names are saved correctly
 function contentDisposition(name: string) {
@@ -56,6 +57,14 @@ export async function GET(
   // Check Time expiration
   if (fileRecord.expiresAt && fileRecord.expiresAt < new Date()) {
     return NextResponse.json({ error: "File link has expired." }, { status: 410 });
+  }
+
+  // 🔒 Encrypted bundles: only someone who knows the password can fetch the
+  // data or use up a download (the token is derived from it, see lib/e2ee.ts)
+  if (fileRecord.passwordHash) {
+    const token = request.headers.get("x-download-token");
+    const rejected = await verifyBundleToken(token, fileRecord.passwordHash, ip, fileRecord.downloadCode);
+    if (rejected) return NextResponse.json({ error: rejected.error }, { status: rejected.status });
   }
 
   // Open the file before claiming a download, so a missing file doesn't use one up.

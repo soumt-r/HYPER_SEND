@@ -76,10 +76,32 @@ export async function recordFailure(key: string, windowSeconds: number): Promise
  * CF-Connecting-IP is set by Cloudflare and can't be forged as long as the app
  * port is only reachable through the tunnel (bound to 127.0.0.1 in docker-compose).
  * X-Forwarded-For's first entry is client-controlled, so only its last hop is used.
+ * Returns the IPv4 address, or the /64 prefix for IPv6 (it only keys rate limits).
  */
 export function getClientIp(headers: Headers): string {
-  return headers.get("cf-connecting-ip")?.trim()
+  const ip = headers.get("cf-connecting-ip")?.trim()
     || headers.get("x-real-ip")?.trim()
     || headers.get("x-forwarded-for")?.split(",").pop()?.trim()
     || "unknown";
+  return ipv6Prefix64(ip) ?? ip;
+}
+
+/**
+ * One IPv6 subscriber usually gets a whole /64, so limiting single addresses
+ * would let them rotate through 2^64 of them. IPv6 clients are keyed by /64.
+ */
+function ipv6Prefix64(ip: string): string | null {
+  if (!ip.includes(":")) return null;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) return mapped[1];
+  const [head, tail = ""] = ip.split("%")[0].split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  if (ip.includes("::")) {
+    const missing = 8 - left.length - right.length;
+    left.push(...Array(Math.max(0, missing)).fill("0"), ...right);
+  }
+  const groups = left.slice(0, 4);
+  if (groups.length < 4 || groups.some((g) => !/^[0-9a-f]{1,4}$/i.test(g))) return null;
+  return groups.map((g) => parseInt(g, 16).toString(16)).join(":") + "::/64";
 }

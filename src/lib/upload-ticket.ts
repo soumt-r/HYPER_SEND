@@ -102,12 +102,15 @@ export async function transitionTicket(id: string, from: UploadTicket["status"],
 
 /** End a ticket (from the PC or the phone), dropping an upload in progress. A finished one stays as is. */
 export async function cancelTicketUpload(ticket: UploadTicket) {
-  await db.update(uploadTickets)
+  // Use the row as cancelled, not the copy passed in: the PC may have started
+  // its upload since that was read
+  const [cancelled] = await db.update(uploadTickets)
     .set({ status: "cancelled" })
-    .where(and(eq(uploadTickets.id, ticket.id), ne(uploadTickets.status, "done")));
-  if (ticket.uploadId && ticket.status !== "done") {
-    const session = await readSession(ticket.uploadId);
-    if (session) await removeSessionFiles(ticket.uploadId, session.files.length);
+    .where(and(eq(uploadTickets.id, ticket.id), ne(uploadTickets.status, "done")))
+    .returning({ uploadId: uploadTickets.uploadId });
+  if (cancelled?.uploadId) {
+    const session = await readSession(cancelled.uploadId);
+    if (session) await removeSessionFiles(cancelled.uploadId, session.files.length);
   }
 }
 

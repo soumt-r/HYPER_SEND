@@ -22,7 +22,7 @@ export default async function Home() {
       // Only what the file list shows; localPath and passwordHash stay on the server
       columns: {
         id: true, originalName: true, sizeBytes: true, downloadCode: true, isEncrypted: true,
-        expiresAt: true, maxDownloads: true, currentDownloads: true, createdAt: true,
+        expiresAt: true, maxDownloads: true, currentDownloads: true, createdAt: true, viaPublicPc: true,
       },
     });
     // Quota usage changes with every upload, so it comes from the DB rather than the session token

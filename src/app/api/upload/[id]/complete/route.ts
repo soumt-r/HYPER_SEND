@@ -10,18 +10,24 @@ import { parseExpiry } from "@/lib/expiry";
 import {
   UPLOADS_DIR, fileSizeOrZero, metaPath, partPath, readSession, removeSessionFiles,
 } from "@/lib/upload-session";
+import { ticketFromHeaders, ticketOwner, transitionTicket } from "@/lib/upload-ticket";
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const verified = await getVerifiedUser();
-  if (!verified) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const userId = verified.user.id;
-
   const { id } = await params;
+
+  // Signed in here, or the public PC whose ticket started this upload
+  const ticket = await ticketFromHeaders(request.headers);
+  const user = ticket === undefined
+    ? (await getVerifiedUser())?.user
+    : ticket?.status === "uploading" && ticket.uploadId === id ? await ticketOwner(ticket) : null;
+  if (!user) {
+    return NextResponse.json({ error: ticket === undefined ? "Unauthorized" : "업로드 승인이 만료되었거나 취소되었어요." }, { status: 401 });
+  }
+  const userId = user.id;
+
   const session = await readSession(id);
   if (!session || session.userId !== userId) {
     return NextResponse.json({ error: "Upload session not found" }, { status: 404 });
@@ -73,6 +79,13 @@ export async function POST(
       return fail("다운로드 코드를 만들지 못했어요. 다시 시도해주세요.", 503);
     }
   }
+  // Upload from a public PC: finish its ticket now, so a cancel from the phone
+  // can't race with publishing the files
+  if (session.ticketId && !await transitionTicket(session.ticketId, "uploading", { status: "done", resultCode: code })) {
+    await db.update(users).set({ usedBytes: sql`GREATEST(0, ${users.usedBytes} - ${totalSize})` }).where(eq(users.id, userId));
+    return fail("취소된 업로드예요.", 409);
+  }
+
   const insertData = [];
   for (let i = 0; i < session.files.length; i++) {
     const file = session.files[i];
@@ -93,6 +106,7 @@ export async function POST(
       passwordHash: session.auth?.hash ?? null,
       authSalt: session.auth?.salt ?? null,
       encryptedMeta: file.meta ?? null,
+      viaPublicPc: !!session.ticketId,
     });
   }
 

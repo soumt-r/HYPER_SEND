@@ -26,6 +26,8 @@ export type UploadSession = {
   isEncrypted: boolean;
   // Encrypted bundles: salt and hash of the password-derived auth token (lib/bundle-auth.ts)
   auth?: { salt: string; hash: string };
+  // Started from a public PC with this upload ticket (lib/upload-ticket.ts)
+  ticketId?: string;
   // `meta` is the encrypted real name/type of a file in an encrypted bundle
   files: { name: string; type: string; size: number; meta?: string }[];
 };

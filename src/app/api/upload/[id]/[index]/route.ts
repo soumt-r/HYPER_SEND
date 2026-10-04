@@ -1,4 +1,4 @@
-import { auth } from "@/auth";
+import { uploaderOf } from "@/lib/upload-ticket";
 import { open, utimes } from "fs/promises";
 import { NextRequest, NextResponse } from "next/server";
 import { MAX_CHUNK_BYTES, fileSizeOrZero, metaPath, partPath, readSession } from "@/lib/upload-session";
@@ -17,14 +17,14 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; index: string }> }
 ) {
-  const authSession = await auth();
-  if (!authSession?.user?.id) {
+  const { id, index: indexParam } = await params;
+  const uploader = await uploaderOf(request.headers, id);
+  if (!uploader) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { id, index: indexParam } = await params;
   const session = await readSession(id);
-  if (!session || session.userId !== authSession.user.id) {
+  if (!session || session.userId !== uploader.userId) {
     return NextResponse.json({ error: "Upload session not found" }, { status: 404 });
   }
 

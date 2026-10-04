@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { files } from "@/db/schema";
 import { count, eq } from "drizzle-orm";
 import { hashToken, isValidMeta, isValidSalt } from "@/lib/bundle-auth";
+import { ticketFromHeaders, ticketOwner, transitionTicket } from "@/lib/upload-ticket";
 import crypto from "crypto";
 import { rateLimit } from "@/lib/rate-limit";
 import { checkServerStorage } from "@/lib/storage";
@@ -36,11 +37,14 @@ function isMimeAllowed(mimeType: string): boolean {
 // Start a chunked upload session. The client then PUTs each file's chunks to
 // /api/upload/[id]/[index] and finishes with POST /api/upload/[id]/complete.
 export async function POST(request: NextRequest) {
-  const verified = await getVerifiedUser();
-  if (!verified) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Signed in here, or a public PC with an approved upload ticket (lib/upload-ticket.ts)
+  const ticket = await ticketFromHeaders(request.headers);
+  const user = ticket === undefined
+    ? (await getVerifiedUser())?.user
+    : ticket?.status === "approved" ? await ticketOwner(ticket) : null;
+  if (!user) {
+    return NextResponse.json({ error: ticket === undefined ? "Unauthorized" : "업로드 승인이 만료되었거나 취소되었어요." }, { status: 401 });
   }
-  const { user } = verified;
   const userId = user.id;
 
   // Rate limit
@@ -117,6 +121,10 @@ export async function POST(request: NextRequest) {
   }
 
   const id = crypto.randomUUID();
+  // A ticket allows a single upload: claim it before anything is written
+  if (ticket && !await transitionTicket(ticket.id, "approved", { status: "uploading", uploadId: id })) {
+    return NextResponse.json({ error: "이 승인으로는 이미 업로드했어요." }, { status: 409 });
+  }
   await writeSession(id, {
     userId,
     createdAt: Date.now(),
@@ -124,6 +132,7 @@ export async function POST(request: NextRequest) {
     expireValue: Number(body.expireValue),
     isEncrypted,
     auth,
+    ticketId: ticket?.id,
     files: uploadFiles,
   });
 

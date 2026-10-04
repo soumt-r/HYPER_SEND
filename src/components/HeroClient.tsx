@@ -106,7 +106,7 @@ async function planUpload(file: File, index: number, bundle: BundleKeys | null):
 }
 
 // Send a file's pieces in order, retrying and resuming from what the server already has
-async function uploadPieces(sessionId: string, index: number, plan: UploadPlan, onProgress: (bytes: number) => void, signal: AbortSignal) {
+async function uploadPieces(sessionId: string, index: number, plan: UploadPlan, onProgress: (bytes: number) => void, signal: AbortSignal, headers: Record<string, string>) {
   let i = 0;
   let failures = 0;
   let lastError = "";
@@ -118,6 +118,7 @@ async function uploadPieces(sessionId: string, index: number, plan: UploadPlan, 
       await piece.data(),
       (loaded) => onProgress(piece.start + loaded),
       signal,
+      headers,
     ).catch((err: Error) => {
       if (signal.aborted) throw err;
       lastError = err.message;
@@ -156,10 +157,11 @@ async function readJson(res: Response) {
 }
 
 // XHR instead of fetch for upload progress events
-function sendChunk(url: string, chunk: Blob, onProgress: (loaded: number) => void, signal: AbortSignal) {
+function sendChunk(url: string, chunk: Blob, onProgress: (loaded: number) => void, signal: AbortSignal, headers: Record<string, string>) {
   return new Promise<{ received?: number; error?: string }>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", url);
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
     signal.addEventListener("abort", () => xhr.abort(), { once: true });
     xhr.onabort = () => reject(new DOMException("Upload cancelled", "AbortError"));
     xhr.upload.onprogress = (e) => onProgress(e.loaded);
@@ -173,7 +175,7 @@ function sendChunk(url: string, chunk: Blob, onProgress: (loaded: number) => voi
 }
 
 export default function HeroClient({ session, initialFiles = [], isAdmin = false, usage = { usedBytes: 0, quotaBytes: 0 }, contactEmail = null }: { session: any, initialFiles?: any[], isAdmin?: boolean, usage?: { usedBytes: number; quotaBytes: number }, contactEmail?: string | null }) {
-  const [activeModal, setActiveModal] = useState<"NONE" | "DOWNLOAD" | "UPLOAD" | "MANAGE">("NONE");
+  const [activeModal, setActiveModal] = useState<"NONE" | "DOWNLOAD" | "UPLOAD" | "MANAGE" | "PAIR">("NONE");
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
@@ -204,6 +206,15 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   const [bundleAuthSalt, setBundleAuthSalt] = useState<string | null>(null);
   const [isUnlocking, setIsUnlocking] = useState(false);
   const bundleKeysRef = useRef<BundleKeys | null>(null);
+
+  // Public PC upload (lib/upload-ticket.ts): a ticket approved from the owner's
+  // phone. The token lives only in this page's memory; `confirmed` once the
+  // person here has checked it was approved for their own account.
+  const [ticket, setTicket] = useState<{
+    token: string; pairCode: string; status: string; account: string | null; confirmed: boolean;
+  } | null>(null);
+  const [ticketError, setTicketError] = useState("");
+  const uploadHeaders: Record<string, string> = ticket?.confirmed ? { "X-Upload-Ticket": ticket.token } : {};
 
   // Upload State
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -292,7 +303,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       // 1. Start an upload session
       const init = await fetch("/api/upload", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...uploadHeaders },
         body: JSON.stringify({
           expireType,
           expireValue,
@@ -318,7 +329,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
             await uploadPieces(init.id, i, plans[i], (bytes) => {
               sent[i] = bytes;
               setUploadProgress(Math.round((sent.reduce((a, b) => a + b, 0) / totalBytes) * 100));
-            }, signal);
+            }, signal, uploadHeaders);
           } catch (err) {
             failed = true;
             throw err;
@@ -328,7 +339,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       await Promise.all(Array.from({ length: Math.min(PARALLEL_FILE_UPLOADS, plans.length) }, worker));
 
       // 3. Finish: the server moves the files into place and issues the code
-      const result = await fetch(`/api/upload/${init.id}/complete`, { method: "POST", signal }).then(readJson);
+      const result = await fetch(`/api/upload/${init.id}/complete`, { method: "POST", headers: uploadHeaders, signal }).then(readJson);
       if (result.error) throw new Error(result.error);
 
       setUploadProgress(100);
@@ -336,11 +347,13 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
       setUploadResult(result.code);
       setSelectedFiles([]);
       setUploadPassword("");
+      // A ticket is single-use: nothing of it stays on this PC
+      if (ticket) setTicket(null);
       router.refresh(); // reload the file list and quota
     } catch (err: any) {
       if (signal.aborted) {
         // Cancelled: free the server-side session now instead of waiting for cleanup
-        if (sessionId) fetch(`/api/upload/${sessionId}`, { method: "DELETE", keepalive: true }).catch(() => {});
+        if (sessionId) fetch(`/api/upload/${sessionId}`, { method: "DELETE", headers: uploadHeaders, keepalive: true }).catch(() => {});
         setUploadState("IDLE");
         setUploadProgress(0);
       } else {
@@ -353,6 +366,51 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   };
 
   const cancelUpload = () => uploadAbortRef.current?.abort();
+
+  // Public PC: get a pair code to approve from a signed-in phone
+  const startPairing = async () => {
+    setTicketError("");
+    setTicket(null);
+    setActiveModal("PAIR");
+    const res = await fetch("/api/ticket", { method: "POST" });
+    const data = await readJson(res);
+    if (!res.ok || !data.token) {
+      setTicketError(data.error || "코드를 받지 못했어요.");
+      return;
+    }
+    setTicket({ token: data.token, pairCode: data.pairCode, status: "pending", account: null, confirmed: false });
+  };
+
+  const cancelTicket = (token: string) =>
+    fetch("/api/ticket", { method: "DELETE", headers: { "X-Upload-Ticket": token }, keepalive: true }).catch(() => {});
+
+  // Wait for the approval on the phone
+  const ticketToken = ticket?.token;
+  const ticketConfirmed = ticket?.confirmed;
+  useEffect(() => {
+    if (!ticketToken || ticketConfirmed) return;
+    let stopped = false;
+    const poll = async () => {
+      const data = await fetch("/api/ticket", { headers: { "X-Upload-Ticket": ticketToken } }).then(readJson).catch(() => null);
+      if (stopped || !data?.status) return;
+      setTicket(t => t && t.token === ticketToken ? { ...t, status: data.status, account: data.account } : t);
+      if (data.status !== "pending") stopped = true;
+    };
+    const timer = setInterval(() => { if (!stopped) poll(); }, 2000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [ticketToken, ticketConfirmed]);
+
+  const confirmTicket = () => {
+    setTicket(t => t && { ...t, confirmed: true });
+    setUploadState("IDLE");
+    setActiveModal("UPLOAD");
+  };
+
+  const rejectTicket = () => {
+    if (ticket) cancelTicket(ticket.token);
+    setTicket(null);
+    setTicketError("요청을 취소했어요. 다른 계정으로 승인됐다면 새 코드로 다시 시도하세요.");
+  };
 
   const handleSearchCode = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -506,6 +564,10 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
   };
 
   const resetModal = () => {
+    // Closing gives up a ticket that wasn't used (a finished one is already gone)
+    if (ticket) cancelTicket(ticket.token);
+    setTicket(null);
+    setTicketError("");
     setActiveModal("NONE");
     setDownloadCode("");
     setFoundFiles([]);
@@ -594,6 +656,15 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
             >
               [ RECEIVE_FILES ]
             </button>
+            {!session?.user && (
+              <button
+                onClick={startPairing}
+                title="로그인된 휴대폰으로 승인하고, 이 PC에서는 로그인 없이 올려요"
+                className="whitespace-nowrap px-6 py-4 bg-white dark:bg-[#1A1A1A] border-[0.5px] border-[#111111] dark:border-[#555555] text-[#111111] dark:text-white font-mono text-[10px] tracking-widest hover:bg-[#FAFAFA] dark:hover:bg-[#222222] transition-colors"
+              >
+                [ SEND_FROM_PUBLIC_PC ]
+              </button>
+            )}
             {session?.user && (
               <button
                 onClick={() => setActiveModal("UPLOAD")}
@@ -808,6 +879,18 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                     <UploadCloud size={14} /> Send Files
                   </div>
                   <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" multiple />
+                  {ticket?.confirmed && uploadState !== "SUCCESS" && (
+                    <div className="font-mono text-[9px] text-[#2549BB] dark:text-[#6F8FFF] bg-[#F2F5FD] dark:bg-[#161B2B] px-3 py-2 leading-relaxed">
+                      공용 PC 업로드 · {ticket.account} · 한 번만 올릴 수 있어요.<br />
+                      비밀번호를 건다면 이 묶음에만 쓰는 새 비밀번호를 쓰세요.
+                    </div>
+                  )}
+                  {!session?.user && !ticket?.confirmed && uploadState !== "SUCCESS" && (
+                    <div className="font-mono text-[10px] text-[#999999] flex flex-col gap-3">
+                      공용 PC 업로드 승인을 이미 썼거나 끝났어요.
+                      <button onClick={startPairing} className="py-3 bg-[#111111] dark:bg-white text-white dark:text-[#111111] tracking-widest">[ GET_NEW_CODE ]</button>
+                    </div>
+                  )}
 
                   {uploadState === "SUCCESS" ? (
                     <div className="w-full flex flex-col gap-4 mt-4">
@@ -918,7 +1001,7 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
 
                       <button
                         onClick={handleUpload}
-                        disabled={selectedFiles.length === 0 || isUploading}
+                        disabled={selectedFiles.length === 0 || isUploading || (!session?.user && !ticket?.confirmed)}
                         className="w-full mt-2 py-3 border-[0.5px] border-[#111111] dark:border-[#555555] bg-[#111111] dark:bg-white text-white dark:text-[#111111] font-mono text-[10px] tracking-widest hover:bg-transparent hover:text-[#111111] dark:hover:bg-transparent dark:hover:text-white dark:hover:border-white transition-colors disabled:opacity-50 relative overflow-hidden"
                       >
                         {selectedFiles.length === 0
@@ -954,6 +1037,56 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                 </>
               )}
 
+              {/* PAIR MODAL: public PC, approved from the owner's phone */}
+              {activeModal === "PAIR" && (
+                <div className="flex flex-col gap-5">
+                  <div className="font-mono text-[10px] text-[#999999] uppercase tracking-widest flex items-center gap-2">
+                    <ShieldCheck size={14} /> Send From Public PC
+                  </div>
+                  {ticketError && <div className="font-mono text-[10px] text-red-500">{ticketError}</div>}
+                  {!ticket ? (
+                    ticketError ? (
+                      <button onClick={startPairing} className="w-full py-3 bg-[#111111] dark:bg-white text-white dark:text-[#111111] font-mono text-[10px] tracking-widest">[ GET_NEW_CODE ]</button>
+                    ) : (
+                      <div className="font-mono text-[10px] text-[#999999] text-center py-8">LOADING...</div>
+                    )
+                  ) : ticket.status === "pending" ? (
+                    <>
+                      <p className="text-xs text-[#666666] dark:text-[#AAAAAA] leading-relaxed">
+                        이 PC에서는 로그인하지 않아요. <strong className="text-[#111111] dark:text-white">학교 계정으로 로그인된 휴대폰</strong>으로
+                        QR을 스캔하거나, 휴대폰에서 <span className="font-mono">{typeof window !== "undefined" ? window.location.host : ""}/pair</span>에 들어가 숫자를 입력해 승인하세요.
+                      </p>
+                      <div className="flex items-center gap-5">
+                        <div className="bg-white p-2 border-[0.5px] border-[#EEEEEE]">
+                          <QRCodeSVG value={`${typeof window !== "undefined" ? window.location.origin : ""}/pair?code=${ticket.pairCode}`} size={120} fgColor="#111111" />
+                        </div>
+                        <div className="font-mono text-3xl tracking-[0.2em] text-[#111111] dark:text-white">{ticket.pairCode}</div>
+                      </div>
+                      <div className="font-mono text-[9px] text-[#999999]">5분 안에 승인해주세요. 승인되면 이 화면이 바뀌어요.</div>
+                    </>
+                  ) : ticket.status === "approved" ? (
+                    <>
+                      <p className="text-xs text-[#666666] dark:text-[#AAAAAA] leading-relaxed">
+                        아래 계정으로 승인됐어요. <strong className="text-[#111111] dark:text-white">내 계정이 맞나요?</strong> 다른 계정이라면
+                        누군가 먼저 QR을 스캔한 것일 수 있으니, 취소하고 새 코드로 다시 시도하세요.
+                      </p>
+                      <div className="font-mono text-lg text-[#111111] dark:text-white text-center py-2">{ticket.account}</div>
+                      <div className="flex gap-3">
+                        <button onClick={confirmTicket} className="flex-1 py-3 bg-[#111111] dark:bg-white text-white dark:text-[#111111] font-mono text-[10px] tracking-widest">[ 내 계정이 맞아요 ]</button>
+                        <button onClick={rejectTicket} className="flex-1 py-3 border-[0.5px] border-[#DDDDDD] dark:border-[#444444] text-[#999999] font-mono text-[10px] tracking-widest hover:text-red-500">[ 아니에요 ]</button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="font-mono text-[10px] text-[#999999]">
+                        {ticket.status === "cancelled" ? "휴대폰에서 거절되었거나 취소됐어요." : "코드가 만료됐어요."}
+                      </div>
+                      <button onClick={startPairing} className="w-full py-3 bg-[#111111] dark:bg-white text-white dark:text-[#111111] font-mono text-[10px] tracking-widest">[ GET_NEW_CODE ]</button>
+                    </>
+                  )}
+                </div>
+              )}
+
               {/* MANAGE MODAL */}
               {activeModal === "MANAGE" && (
                 <>
@@ -972,6 +1105,11 @@ export default function HeroClient({ session, initialFiles = [], isAdmin = false
                               <span className="text-[9px] text-[#999999] font-normal uppercase bg-[#EEEEEE] dark:bg-[#2A2A2A] px-1.5 py-0.5 rounded-sm">
                                 {filesInBundle.length} Files
                               </span>
+                              {filesInBundle[0]?.viaPublicPc && (
+                                <span className="text-[9px] text-[#2549BB] font-normal bg-[#F2F5FD] dark:bg-[#161B2B] px-1.5 py-0.5 rounded-sm" title="공용 PC에서 휴대폰 승인으로 올린 묶음">
+                                  공용 PC
+                                </span>
+                              )}
                             </div>
                             <button
                               onClick={() => {

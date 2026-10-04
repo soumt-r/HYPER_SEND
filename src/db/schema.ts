@@ -82,10 +82,36 @@ export const files = pgTable("file", {
   currentDownloads: integer("currentDownloads").default(0),
 
   isEncrypted: boolean("isEncrypted").default(false),
+  // Uploaded from a public PC through an upload ticket (lib/upload-ticket.ts)
+  viaPublicPc: boolean("viaPublicPc").notNull().default(false),
 
   createdAt: timestamp("createdAt", { mode: "date" }).notNull().defaultNow(),
 }, (file) => [
   index("file_downloadCode_idx").on(file.downloadCode), // code lookup
   index("file_uploaderId_idx").on(file.uploaderId), // "my files" list
   index("file_expiresAt_idx").on(file.expiresAt), // expiry worker
+])
+
+export type TicketStatus = "pending" | "approved" | "uploading" | "done" | "cancelled"
+
+// Lets a signed-out browser (a public PC) upload one bundle into an account,
+// after the account's owner approves it from their own signed-in phone
+export const uploadTickets = pgTable("upload_ticket", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  // SHA-256 of the secret the PC holds in memory and sends with each request
+  tokenHash: text("tokenHash").notNull().unique(),
+  // 6 digits shown on the PC (also inside its QR code), entered on the phone
+  pairCode: text("pairCode").notNull(),
+  status: text("status").$type<TicketStatus>().notNull().default("pending"),
+  // Set on approval
+  userId: text("userId").references(() => users.id, { onDelete: "cascade" }),
+  approvedAt: timestamp("approvedAt", { mode: "date" }),
+  // Browser and OS of the PC (no IP), shown on the phone before approving
+  device: text("device"),
+  uploadId: text("uploadId"),
+  resultCode: text("resultCode"),
+  createdAt: timestamp("createdAt", { mode: "date" }).notNull().defaultNow(),
+  expiresAt: timestamp("expiresAt", { mode: "date" }).notNull(),
+}, (ticket) => [
+  index("upload_ticket_pairCode_idx").on(ticket.pairCode),
 ])

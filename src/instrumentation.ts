@@ -4,6 +4,7 @@ import { lt } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { cleanupStaleSessions } from "@/lib/upload-session";
 import { deleteFileRecords } from "@/lib/file-ops";
+import { cleanupTickets } from "@/lib/upload-ticket";
 
 // Apply pending SQL migrations from ./drizzle, retrying while the DB is still starting up
 async function runMigrations() {
@@ -47,6 +48,7 @@ export async function register() {
     setInterval(async () => {
       // Remove temp files of chunked uploads that were abandoned
       await cleanupStaleSessions().catch((err) => console.error("[Worker] Upload cleanup error:", err));
+      await cleanupTickets().catch((err) => console.error("[Worker] Ticket cleanup error:", err));
 
       try {
         const now = new Date();
